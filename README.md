@@ -32,8 +32,8 @@ This is feasible, but it should be treated as a research/prototyping project rat
 | MQTT or UDP ingestion | Optional later | JSON polling is simpler for the first milestone; MQTT/UDP may help if boosted burst streams become too chatty for polling. |
 | Rolling retention | Required once deployed | Summary/event retention should be bounded from day one to avoid SD-card wear and unbounded database growth. |
 | VAPID push notifications | Feasible | The Pi can send Web Push notifications for alarm events, but subscriptions, user consent, and delivery failures must be handled carefully. |
-| Cloudflare Turnstile | Recommended | Public authentication and invite flows should use Turnstile-style bot protection like TaskIt, with mandatory server-side token validation. |
-| Cloudflare Access session handling | Recommended for remote PWA use | If Access is used as an outer gate, the PWA must detect expired sessions and force a clean browser re-entry instead of treating HTML login pages as JSON. |
+| Cloudflare Access/App Login | Recommended | Use Cloudflare as the outer login gate for the public hostname, then keep app-level roles, sessions, and audit trails inside the PWA. |
+| Cloudflare Access session handling | Required for remote PWA use | The PWA must detect expired Access sessions and force a clean browser re-entry instead of treating HTML login pages as JSON. |
 | Version-aware PWA updates | Required | Installed PWAs must check the host version and refresh their service worker, manifest, icons, and app shell when a new payload is available. |
 | SQLCipher from first boot | Recommended | Starting with an encrypted database avoids plaintext migration later and is appropriate once the service stores users, sessions, push subscriptions, and alarm history. |
 | Internet exposure via Cloudflare Tunnel | Feasible but security-critical | Tunnel avoids opening router ports, but the application still needs strong authentication, rate limiting, session security, and admin controls. |
@@ -52,7 +52,7 @@ Cloudflare Tunnel
         |
         v
 Raspberry Pi services
-  - Node.js/TypeScript web service: PWA, auth, VAPID, Turnstile, API
+  - Node.js/TypeScript web service: PWA, auth, VAPID, API
   - Python polling service: ESP32 polling, feature processing, fusion
   - SQLCipher database: users, settings, events, node state
         |
@@ -154,7 +154,7 @@ Required behaviour:
 
 Recommended split-service stack:
 
-- Node.js/TypeScript web service for the PWA, authentication, Cloudflare Turnstile verification, VAPID Web Push, admin screens, versioned service worker, and public HTTPS-facing API.
+- Node.js/TypeScript web service for the PWA, authentication, VAPID Web Push, admin screens, versioned service worker, and public HTTPS-facing API.
 - Python 3 polling service for ESP32 polling, CSI feature ingestion, rolling baselines, movement scoring, node health, signal processing, and future model inference.
 - SQLCipher-backed SQLite for persistent users, settings, node registry, events, calibration data, audit logs, and push subscriptions.
 - A narrow internal interface between the services: internal HTTP on loopback, a local queue, or database-backed event tables.
@@ -179,7 +179,6 @@ Node web-service candidates:
 
 - Express or Fastify with TypeScript.
 - `web-push` or equivalent for VAPID notifications.
-- Cloudflare Turnstile server-side verification via Siteverify.
 - SQLCipher-capable SQLite driver.
 - Static PWA hosting with versioned service-worker assets.
 
@@ -307,7 +306,7 @@ Run the Raspberry Pi web service as an internet-reachable but tightly controlled
 
 This is feasible and a good fit for a PWA-based alarm dashboard, but it changes the risk profile. Once the service is reachable from the internet, authentication, session management, user enrolment, audit logging, and rate limiting become core alarm-system features rather than polish.
 
-The website should adopt the same broad security shape as `github.com/jamesjhs/taskit`: VAPID Web Push for background browser/PWA notifications, Cloudflare Turnstile for bot-resistant public auth flows, SQLCipher-backed settings and secrets, and a version-aware PWA/service-worker update path.
+The website should use a TypeScript web service with VAPID Web Push for background browser/PWA notifications, Cloudflare Access/App Login as the outer public gate, SQLCipher-backed settings and secrets, and a version-aware PWA/service-worker update path.
 
 Target network structure:
 
@@ -323,19 +322,21 @@ Cloudflare edge: house.jahosi.co.uk
 cloudflared on Raspberry Pi
         |
         v
-Local backend: http://127.0.0.1:<app-port>
+Local PWA/web backend: http://127.0.0.1:3000
+Local ESP32 telemetry receiver: http://<pi-lan-ip>:1000/espdata
         |
         v
 Home router / LAN / ESP32 nodes
 ```
 
-Cloudflare Tunnel assessment:
+Cloudflare Tunnel and Access assessment:
 
 - Cloudflare Tunnel is suitable because it lets the Pi make outbound tunnel connections without opening inbound ports on the home router.
-- The public hostname should map only to the Pi web application, not directly to ESP32 devices.
-- The local app should bind to `127.0.0.1` or a firewall-restricted interface where possible, with `cloudflared` as the intended ingress path.
+- The public hostname should map only to the Pi web application on local port `3000`, not directly to ESP32 devices or the telemetry receiver.
+- The local PWA/web app should bind to `127.0.0.1:3000` where possible, with `cloudflared` as the intended ingress path.
+- The ESP32 telemetry receiver should remain on port `1000` at `/espdata` for LAN-only node posts and should not be routed through Cloudflare.
 - A local reverse proxy such as Nginx is optional. It may be useful later for static-file serving, compression, TLS termination on the LAN, or routing multiple local services, but it is not required if `cloudflared` can route directly to the Node web service.
-- Cloudflare Access should be considered as an outer gate for `house.jahosi.co.uk`, especially during early development.
+- Cloudflare Access/App Login should be the outer gate for `house.jahosi.co.uk`.
 - Application-level login is still required even if Cloudflare Access is used, because the app needs roles, audit trails, push subscriptions, and alarm actions tied to specific users.
 
 Cloudflare Access and PWA session handling:
@@ -359,22 +360,18 @@ VAPID Web Push assessment:
 - Notification payloads should be self-contained enough for the service worker to display without fetching through a possibly expired Cloudflare Access session.
 - Payloads should still avoid sensitive detail. A good pattern is an event type, severity, timestamp, safe title/body text, and a short event ID; the authenticated PWA can fetch full details after login.
 
-Cloudflare Turnstile assessment:
+Cloudflare Access/App Login assessment:
 
-- Cloudflare Turnstile should be present from the first public website version for bot-resistant registration, invite acceptance, password reset, and other unauthenticated write flows.
-- Follow the TaskIt pattern: store Turnstile configuration in a singleton `turnstile_settings` record, seed from environment variables on first boot, and allow owner/admin runtime configuration.
-- Expose a public status endpoint such as `GET /api/auth/turnstile` returning only `{ site_key, enabled }`.
-- Never expose the Turnstile secret key to clients or non-owner/admin routes.
-- Use explicit client rendering for the widget so the SPA/PWA controls exactly when Turnstile appears.
-- Send the Turnstile token with the protected request and verify it server-side with Cloudflare Siteverify before processing the action.
-- Treat server-side validation as mandatory. Client-side widget completion alone does not protect the endpoint.
-- Tokens are short-lived and single-use, so failed or delayed submissions should reset the widget and request a fresh token.
-- Turnstile should complement, not replace, login throttling, invite-only registration, account lockouts, and audit logs.
+- Turnstile is not required while the public hostname is protected by Cloudflare Access/App Login.
+- Keep invite, password reset, and first-run setup flows behind Cloudflare Access rather than exposing unauthenticated public forms.
+- The TypeScript web service should still enforce its own sessions, roles, CSRF protection, rate limits, and audit logs after Cloudflare has admitted the browser.
+- Treat Cloudflare identity headers as useful context only after verifying they came through the trusted tunnel path; do not let direct LAN requests spoof public identity.
+- Keep local recovery/setup paths local-only or physical-presence gated, not internet-public.
 
 SQLCipher database assessment:
 
 - Use SQLCipher from the first migration, not as a later retrofit.
-- Store users, roles, password hashes, sessions/refresh tokens, VAPID settings, Turnstile settings, push subscriptions, node registry, calibration data, alarm events, and audit logs in the encrypted database.
+- Store users, roles, password hashes, sessions/refresh tokens, VAPID settings, push subscriptions, node registry, calibration data, alarm events, and audit logs in the encrypted database.
 - Keep the SQLCipher key outside the database file. Candidate options include an environment file with restricted permissions, `systemd` credentials, a boot-time passphrase, or a hardware-backed secret later.
 - Backups must preserve encryption and key-handling rules. A copied database without the key should be useless.
 - If the service needs unattended reboot, key storage must balance security with availability. A fully manual boot passphrase is safer but less convenient after power cuts.
@@ -384,7 +381,6 @@ Suggested initial tables:
 - `users`: identity, display name, password hash, role, state, timestamps.
 - `sessions`: server-side session or refresh-token records, expiry, device metadata.
 - `vapid_settings`: singleton public key, private key, subject, update timestamp.
-- `turnstile_settings`: singleton site key, secret key, enabled flag, update timestamp.
 - `push_subscriptions`: endpoint, public keys, user/device association, enabled state, failure count.
 - `nodes`: ESP32 identity, assigned node number, expected/active state.
 - `events`: alarm, movement, node health, login, admin action, and configuration events.
@@ -419,8 +415,8 @@ Success criteria:
 
 - `https://house.jahosi.co.uk` reaches only the Pi service through Cloudflare Tunnel.
 - The service is usable by more than one named user, with per-user push subscriptions and auditable alarm actions.
-- VAPID and Turnstile configuration are owner/admin manageable and stored encrypted at rest.
-- Public registration/invite/reset flows are protected by Turnstile when enabled, with server-side Siteverify enforcement.
+- VAPID configuration is owner/admin manageable and stored encrypted at rest.
+- Public access is gated by Cloudflare Access/App Login, while invite/reset/setup flows remain protected by app sessions, CSRF protection, throttling, and audit logging.
 - The SQLCipher database exists before any user/session/push data is written.
 - Failed login attempts, stale sessions, and unwanted registrations are blocked and logged.
 - A stolen database file does not reveal users, push endpoints, alarm history, or calibration data without the database key.
@@ -540,18 +536,18 @@ Recommended runtime layout on the Raspberry Pi:
 
 | Component | Preferred stack | Responsibility |
 | --- | --- | --- |
-| Web/PWA service | Node.js + TypeScript | Public app, auth, roles, Turnstile, VAPID, PWA assets, admin UI, Cloudflare-facing API. |
-| Polling service | Python | ESP32 polling, feature windows, movement scoring, degraded-node handling, future ML inference. |
+| Web/PWA service | Node.js + TypeScript on `127.0.0.1:3000` | Public app, auth, roles, VAPID, PWA assets, admin UI, Cloudflare-facing API. |
+| Polling service | Python with LAN receiver on `:1000/espdata` | ESP32 telemetry ingest, sparse polling, feature windows, movement scoring, degraded-node handling, UDP probe traffic, future ML inference. |
 | Database | SQLCipher SQLite | Persistent state shared through controlled access patterns. |
 | Node process manager | PM2 | Run and restart the Node.js/TypeScript web service. |
 | System services | `systemd` | Run the Python poller and `cloudflared` with restart policies. |
 
 Python vs Node.js assessment:
 
-- Node.js is the stronger fit for the web layer because the project already wants TaskIt-style VAPID, Turnstile, PWA versioning, and browser-facing workflows. Reusing those patterns in TypeScript should reduce implementation risk.
+- Node.js with TypeScript is the required fit for the web layer because the project needs typed browser-facing APIs, VAPID, PWA versioning, and maintainable auth/session workflows.
 - Python is the stronger fit for CSI polling and signal analysis because its ecosystem is better for numerical processing, calibration experiments, plotting, and lightweight ML.
 - A pure Node.js build would simplify deployment but make signal-processing and future ML work less natural.
-- A pure Python build would simplify polling/ML but make the PWA/auth/VAPID/Turnstile layer less aligned with the TaskIt reference.
+- A pure Python build would simplify polling/ML but make the PWA/auth/VAPID layer less aligned with the intended TypeScript web service.
 - Running one Node process and one Python process on a Raspberry Pi 4 or 5 should be comfortably within resource limits if raw CSI streaming is avoided during normal operation.
 - The split also reduces blast radius: the web service can restart or deploy without interrupting the poller, and the poller can be tuned without touching login/security code.
 - PM2 is a good fit for the Node web service because it provides process restart, logs, environment handling, startup integration, and simple deployment ergonomics for a long-running JavaScript app on the Pi.
@@ -570,7 +566,8 @@ Success criteria:
 
 - The Pi can start, stop, and restart the web service and polling service independently.
 - PM2 supervises the Node web service and restarts it after crashes or reboot.
-- The Cloudflare Tunnel exposes only the Node web service.
+- The Cloudflare Tunnel exposes only the Node web service on local port `3000`.
+- ESP32 nodes post telemetry only to the Python worker on LAN port `1000` at `/espdata`.
 - The polling service continues collecting node health even when the PWA is not open.
 - Shared contracts make it clear which service owns each API route, database table, and background job.
 
@@ -589,9 +586,8 @@ Success criteria:
 | High-rate storage wears the Pi SD card | Aggregate in RAM, write compact summary rows in batches, use WAL/checkpoint discipline where appropriate, and enforce FIFO retention. |
 | Idle/boost thresholds flap between modes | Add hysteresis, minimum state durations, cooldown timers, and Pi-visible state-transition logs. |
 | Training overfits to one house layout | Keep labelled test sessions separate, evaluate across days, and expose confidence/drift rather than assuming a model is permanently valid. |
-| Internet exposure enables unwanted login attempts | Use Cloudflare Access where appropriate, invite-only users, login throttling, MFA for privileged accounts, secure sessions, CSRF protection, and audit logging. |
+| Internet exposure enables unwanted login attempts | Require Cloudflare Access/App Login for the public hostname, then use invite-only users, login throttling, MFA for privileged accounts, secure sessions, CSRF protection, and audit logging inside the app. |
 | Cloudflare Access expiry breaks background API calls | Detect HTML/challenge responses in the PWA HTTP client, stop background retry loops, and force a top-level reload for re-authentication. |
-| Turnstile is implemented only client-side | Always verify Turnstile tokens on the server with Cloudflare Siteverify before accepting protected public-form submissions. |
 | Push notification data leaks sensitive information | Store push subscriptions encrypted, keep payloads minimal, and require login to view alarm details. |
 | SQLCipher key is mishandled | Keep key material outside the database, restrict file permissions, document backup/restore flow, and decide explicitly between unattended boot and manual unlock. |
 | Installed PWA runs stale code | Use `/api/version`, versioned cache names, versioned asset URLs, service-worker activation cleanup, and mandatory-update blocking for sensitive changes. |
@@ -642,7 +638,7 @@ Success criteria:
 8. **Secure remote access and notifications**
    - Publish `https://house.jahosi.co.uk` through Cloudflare Tunnel.
    - Create SQLCipher database before first user setup.
-   - Add owner account, invite-only users, roles, sessions, rate limiting, audit log, VAPID push, and Cloudflare Turnstile.
+   - Add owner account, invite-only users, roles, sessions, rate limiting, audit log, VAPID push, and Cloudflare Access-aware session handling.
    - Add Cloudflare Access-aware frontend handling for expired sessions returning HTML instead of JSON.
 
 9. **PWA version enforcement**
@@ -679,12 +675,11 @@ Success criteria:
 - Whether ESP32 nodes should expose raw CSI only on request, or always include a compact rolling feature vector.
 - Whether model training should happen on the Pi or on a more powerful development machine with only inference deployed to the Pi.
 - Whether the poller should communicate with the web service through an internal HTTP API, direct SQLCipher writes, a local queue, or a hybrid.
-- Whether the web service should be Node.js/TypeScript from day one, with Python reserved for the poller, or whether an early all-Python prototype is useful before splitting.
-- Whether Cloudflare Access should be mandatory for all remote access or optional in front of the app's own login.
+- Use Node.js/TypeScript for the web service from day one, with Python reserved for the poller.
+- Whether Cloudflare Access should be mandatory for all remote access or allow a local-only bypass on the LAN.
 - Whether `cloudflared` should route directly to the Node service or through a local Nginx reverse proxy.
 - Whether SQLCipher unlock should be unattended after reboot or require a local/manual unlock step.
 - Whether owner/admin accounts should require MFA from the first version.
-- Which public flows require Turnstile from day one: registration, invite acceptance, login, password reset, contact/report forms, or all unauthenticated writes.
 - Which notification events should be pushed immediately and which should only appear in the PWA event history.
 - Which update types should be mandatory and block stale clients until refresh.
 - Whether the final system should integrate with Home Assistant, MQTT, or remain standalone.
@@ -705,8 +700,6 @@ Success criteria:
 - [Cloudflare Tunnel setup](https://developers.cloudflare.com/tunnel/setup/)
 - [Cloudflare Tunnel public hostname routing](https://developers.cloudflare.com/tunnel/routing/)
 - [Cloudflare Access for self-hosted applications](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/)
-- [Cloudflare Turnstile server-side validation](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)
-- [Cloudflare Turnstile client-side rendering](https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/)
 - [SQLCipher documentation](https://www.zetetic.net/sqlcipher/documentation/)
 - [SQLCipher API reference](https://www.zetetic.net/sqlcipher/sqlcipher-api/)
 - [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)
@@ -714,4 +707,3 @@ Success criteria:
 - [OWASP Multifactor Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html)
 - [TaskIt reference repository](https://github.com/jamesjhs/taskit)
 - [TaskIt VAPID Push Guide](https://github.com/jamesjhs/taskit/blob/main/VAPID_PUSH_GUIDE.md)
-- [TaskIt Turnstile implementation notes](https://github.com/jamesjhs/taskit/blob/main/TURNSTILE_IMPLEMENTATION.md)
