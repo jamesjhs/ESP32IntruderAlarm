@@ -288,6 +288,13 @@ FakesAssemblies/
 .ntvs_analysis.dat
 node_modules/
 
+# ESP-IDF
+firmware/**/build/
+firmware/**/managed_components/
+firmware/**/dependencies.lock
+firmware/**/sdkconfig
+firmware/**/sdkconfig.old
+
 # Visual Studio 6 build log
 *.plg
 
