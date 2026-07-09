@@ -28,6 +28,15 @@ LAN-only and should not be routed through Cloudflare.
 Copy `.env.example` to `.env`, edit secrets, then start each app from its own
 directory.
 
+For a Debian Raspberry Pi deployment with `systemd` for the Python worker and
+PM2 for the TypeScript PWA service, run:
+
+```bash
+cd raspberrypi
+chmod +x ./install-and-run.sh
+./install-and-run.sh
+```
+
 Python worker:
 
 ```powershell
