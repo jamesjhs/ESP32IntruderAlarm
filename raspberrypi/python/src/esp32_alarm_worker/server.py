@@ -9,6 +9,7 @@ from aiohttp import web
 
 from .config import WorkerConfig, load_config
 from .state import NodeStore
+from .views import render_index_html
 
 
 async def udp_probe_loop(config: WorkerConfig) -> None:
@@ -37,6 +38,10 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
                 "version": config.version,
             }
         )
+
+    async def index(_: web.Request) -> web.Response:
+        status_data = store.status(config.version)
+        return web.Response(text=render_index_html(status_data), content_type="text/html")
 
     async def receive_telemetry(request: web.Request) -> web.Response:
         try:
@@ -71,6 +76,7 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
             with suppress(asyncio.CancelledError):
                 await task
 
+    app.router.add_get("/", index)
     app.router.add_get("/healthz", healthz)
     app.router.add_post(config.telemetry_path, receive_telemetry)
     app.router.add_get("/internal/status", status)
