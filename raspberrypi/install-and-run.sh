@@ -47,6 +47,31 @@ run_as_user() {
   fi
 }
 
+show_pwa_diagnostics() {
+  warn "PWA did not answer on http://127.0.0.1:3015/api/healthz"
+  printf '\n[%s] Current port environment:\n' "${APP_NAME}" >&2
+  grep -E '^(PWA_PORT|PWA_HOST|WORKER_INTERNAL_URL|WORKER_PORT)=' "${ENV_FILE}" >&2 || true
+
+  printf '\n[%s] PM2 status:\n' "${APP_NAME}" >&2
+  run_as_user pm2 status "${PWA_PM2_NAME}" >&2 || true
+
+  printf '\n[%s] PM2 recent logs:\n' "${APP_NAME}" >&2
+  run_as_user pm2 logs "${PWA_PM2_NAME}" --lines 80 --nostream >&2 || true
+
+  if command -v ss >/dev/null 2>&1; then
+    printf '\n[%s] Listening TCP sockets around the expected ports:\n' "${APP_NAME}" >&2
+    ss -ltnp 2>/dev/null | grep -E ':(3005|3010|3015)\b' >&2 || true
+  fi
+}
+
+check_pwa_health() {
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:3015/api/healthz" >/dev/null
+  else
+    node -e "fetch('http://127.0.0.1:3015/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  fi
+}
+
 require_command systemctl
 require_command python3
 require_command node
@@ -132,6 +157,12 @@ else
   run_as_user pm2 start "${PWA_DIR}/dist/server.js" --name "${PWA_PM2_NAME}" --time
 fi
 run_as_user pm2 save
+
+log "Checking PWA health on port 3015"
+if ! check_pwa_health; then
+  show_pwa_diagnostics
+  die "PWA is not listening on port 3015."
+fi
 
 log "Configuring PM2 startup integration"
 if ! "${SUDO[@]}" env PATH="${PATH}" pm2 startup systemd -u "${RUN_USER}" --hp "${RUN_HOME}"; then
