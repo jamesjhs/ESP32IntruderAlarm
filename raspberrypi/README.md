@@ -4,8 +4,8 @@ Version: `0.0.1`
 
 This directory contains the Raspberry Pi side of ESP32IntruderAlarm.
 
-- `PWA/`: Node.js + TypeScript web/PWA/API service on `127.0.0.1:3000`.
-- `python/`: Python ESP32 telemetry worker on LAN port `1000` at `/espdata`.
+- `PWA/`: Node.js + TypeScript web/PWA/API service on `127.0.0.1:3015`.
+- `python/`: Python ESP32 telemetry worker on LAN port `3005` at `/espdata`.
 - `.env.example`: shared first-install configuration template.
 - `VERSION`: server-side Raspberry Pi project version.
 
@@ -14,10 +14,10 @@ The intended network split is:
 ```text
 Cloudflare Access/App Login
   -> Cloudflare Tunnel
-  -> TypeScript PWA service: http://127.0.0.1:3000
+  -> TypeScript PWA service: http://127.0.0.1:3015
 
 ESP32 nodes on LAN
-  -> Python worker: http://<pi-lan-ip>:1000/espdata
+  -> Python worker: http://<pi-lan-ip>:3005/espdata
 ```
 
 Cloudflare should expose only the PWA service. The ESP32 telemetry receiver is
@@ -35,6 +35,14 @@ PM2 for the TypeScript PWA service, run:
 cd raspberrypi
 chmod +x ./install-and-run.sh
 ./install-and-run.sh
+```
+
+To update an existing install from the old `3000`/`1000` ports to `3015`/`3005`
+without reinstalling everything, run:
+
+```bash
+cd raspberrypi
+bash ./amend-ports.sh
 ```
 
 Python worker:
@@ -55,8 +63,8 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000` for the PWA service. Point ESP32 nodes at
-`http://<pi-lan-ip>:1000/espdata`.
+Open `http://127.0.0.1:3015` for the PWA service. Point ESP32 nodes at
+`http://<pi-lan-ip>:3005/espdata`.
 
 ## Documentation
 

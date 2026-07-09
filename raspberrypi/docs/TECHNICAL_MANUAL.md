@@ -24,14 +24,14 @@ The Python worker owns LAN sensor concerns:
 - future movement fusion and database event writes
 
 The services communicate over loopback. The PWA service reads worker status from
-`http://127.0.0.1:1000/internal/status`.
+`http://127.0.0.1:3005/internal/status`.
 
 ## Ports
 
 | Service | Bind | Purpose |
 | --- | --- | --- |
-| PWA/API | `127.0.0.1:3000` | Cloudflare Tunnel target and local browser UI. |
-| Python worker | `0.0.0.0:1000` | LAN ESP32 telemetry receiver at `/espdata`. |
+| PWA/API | `127.0.0.1:3015` | Cloudflare Tunnel target and local browser UI. |
+| Python worker | `0.0.0.0:3005` | LAN ESP32 telemetry receiver at `/espdata`. |
 
 ## Security Model
 

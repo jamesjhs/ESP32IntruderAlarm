@@ -322,8 +322,8 @@ Cloudflare edge: house.jahosi.co.uk
 cloudflared on Raspberry Pi
         |
         v
-Local PWA/web backend: http://127.0.0.1:3000
-Local ESP32 telemetry receiver: http://<pi-lan-ip>:1000/espdata
+Local PWA/web backend: http://127.0.0.1:3015
+Local ESP32 telemetry receiver: http://<pi-lan-ip>:3005/espdata
         |
         v
 Home router / LAN / ESP32 nodes
@@ -332,9 +332,9 @@ Home router / LAN / ESP32 nodes
 Cloudflare Tunnel and Access assessment:
 
 - Cloudflare Tunnel is suitable because it lets the Pi make outbound tunnel connections without opening inbound ports on the home router.
-- The public hostname should map only to the Pi web application on local port `3000`, not directly to ESP32 devices or the telemetry receiver.
-- The local PWA/web app should bind to `127.0.0.1:3000` where possible, with `cloudflared` as the intended ingress path.
-- The ESP32 telemetry receiver should remain on port `1000` at `/espdata` for LAN-only node posts and should not be routed through Cloudflare.
+- The public hostname should map only to the Pi web application on local port `3015`, not directly to ESP32 devices or the telemetry receiver.
+- The local PWA/web app should bind to `127.0.0.1:3015` where possible, with `cloudflared` as the intended ingress path.
+- The ESP32 telemetry receiver should remain on port `3005` at `/espdata` for LAN-only node posts and should not be routed through Cloudflare.
 - A local reverse proxy such as Nginx is optional. It may be useful later for static-file serving, compression, TLS termination on the LAN, or routing multiple local services, but it is not required if `cloudflared` can route directly to the Node web service.
 - Cloudflare Access/App Login should be the outer gate for `house.jahosi.co.uk`.
 - Application-level login is still required even if Cloudflare Access is used, because the app needs roles, audit trails, push subscriptions, and alarm actions tied to specific users.
@@ -536,8 +536,8 @@ Recommended runtime layout on the Raspberry Pi:
 
 | Component | Preferred stack | Responsibility |
 | --- | --- | --- |
-| Web/PWA service | Node.js + TypeScript on `127.0.0.1:3000` | Public app, auth, roles, VAPID, PWA assets, admin UI, Cloudflare-facing API. |
-| Polling service | Python with LAN receiver on `:1000/espdata` | ESP32 telemetry ingest, sparse polling, feature windows, movement scoring, degraded-node handling, UDP probe traffic, future ML inference. |
+| Web/PWA service | Node.js + TypeScript on `127.0.0.1:3015` | Public app, auth, roles, VAPID, PWA assets, admin UI, Cloudflare-facing API. |
+| Polling service | Python with LAN receiver on `:3005/espdata` | ESP32 telemetry ingest, sparse polling, feature windows, movement scoring, degraded-node handling, UDP probe traffic, future ML inference. |
 | Database | SQLCipher SQLite | Persistent state shared through controlled access patterns. |
 | Node process manager | PM2 | Run and restart the Node.js/TypeScript web service. |
 | System services | `systemd` | Run the Python poller and `cloudflared` with restart policies. |
@@ -566,8 +566,8 @@ Success criteria:
 
 - The Pi can start, stop, and restart the web service and polling service independently.
 - PM2 supervises the Node web service and restarts it after crashes or reboot.
-- The Cloudflare Tunnel exposes only the Node web service on local port `3000`.
-- ESP32 nodes post telemetry only to the Python worker on LAN port `1000` at `/espdata`.
+- The Cloudflare Tunnel exposes only the Node web service on local port `3015`.
+- ESP32 nodes post telemetry only to the Python worker on LAN port `3005` at `/espdata`.
 - The polling service continues collecting node health even when the PWA is not open.
 - Shared contracts make it clear which service owns each API route, database table, and background job.
 

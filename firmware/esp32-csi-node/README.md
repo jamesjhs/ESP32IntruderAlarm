@@ -139,7 +139,7 @@ Example config update:
 {
   "device_id": 0,
   "pi_ip": "192.168.1.10",
-  "pi_port": 1000,
+  "pi_port": 3005,
   "pi_api_path": "/espdata",
   "pi_post_interval_ms": 5000,
   "idle_rate_hz": 10,
@@ -157,7 +157,7 @@ The firmware clamps values before storing them:
 
 - `device_id`: 0-255
 - `pi_ip`: empty or valid IPv4 address
-- `pi_port`: 1-65535, default 1000
+- `pi_port`: 1-65535, default 3005
 - `pi_api_path`: receiving API path, default `/espdata`
 - `pi_post_interval_ms`: 1000-30000 ms
 - `idle_rate_hz`: 10-100 Hz
@@ -305,7 +305,7 @@ and API values in plain English.
 - `pi_ip`: The Raspberry Pi server IP address. It may be blank until the Pi has
   a known address.
 - `pi_port`: The Raspberry Pi HTTP port for the receiving API. The default is
-  `1000`.
+  `3005`.
 - `pi_api_path`: The receiving API path on the Pi. The default is `/espdata`.
   If a path is posted without a leading slash, the firmware adds one before
   saving it.

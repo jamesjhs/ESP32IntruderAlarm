@@ -14,11 +14,11 @@ The TypeScript service owns the public application surface:
 
 ## Runtime
 
-The service binds to `127.0.0.1:3000` by default. Cloudflare Tunnel should route
+The service binds to `127.0.0.1:3015` by default. Cloudflare Tunnel should route
 `house.jahosi.co.uk` to this loopback address.
 
 The ESP32 telemetry endpoint is not part of this service. ESP32 devices should
-post directly to the Python worker on LAN port `1000` at `/espdata`.
+post directly to the Python worker on LAN port `3005` at `/espdata`.
 
 ## API Design
 

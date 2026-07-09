@@ -3,7 +3,7 @@
 Version: `0.0.1`
 
 The Python worker receives compact telemetry from ESP32 CSI nodes on LAN port
-`1000` at `/espdata`. It keeps live node state in memory, exposes internal
+`3005` at `/espdata`. It keeps live node state in memory, exposes internal
 status endpoints for the TypeScript PWA service, and can send optional UDP probe
 traffic on a timer.
 
@@ -62,10 +62,10 @@ On Python `3.9`, the worker pins `python-dotenv` below `1.2.2` because
 
 If ESP32 posts fail, confirm:
 
-- The worker is listening on port `1000`.
-- The Pi firewall allows LAN clients to reach port `1000`.
+- The worker is listening on port `3005`.
+- The Pi firewall allows LAN clients to reach port `3005`.
 - The ESP32 `pi_ip`, `pi_port`, and `pi_api_path` are set to the Pi LAN IP,
-  `1000`, and `/espdata`.
+  `3005`, and `/espdata`.
 - Cloudflare is not involved in ESP32 telemetry.
 
 If UDP probing appears to disturb calibration, disable it, recalibrate, then

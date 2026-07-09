@@ -3,7 +3,7 @@
 Version: `0.0.1`
 
 This app serves the Raspberry Pi web dashboard and browser-facing API on
-`127.0.0.1:3000`. It is the only service intended to sit behind Cloudflare
+`127.0.0.1:3015`. It is the only service intended to sit behind Cloudflare
 Tunnel and Cloudflare Access/App Login.
 
 ## Install
@@ -76,7 +76,7 @@ The service expects Node `22.21.0` or newer. The package is intentionally not
 limited to Node 22 so development on newer Windows sandboxes also works.
 
 If the PWA cannot show node status, check that the Python worker is running at
-`http://127.0.0.1:1000`.
+`http://127.0.0.1:3005`.
 
 If Cloudflare shows the app but API calls fail after some idle time, the browser
 may be receiving a Cloudflare Access HTML challenge instead of JSON. The PWA

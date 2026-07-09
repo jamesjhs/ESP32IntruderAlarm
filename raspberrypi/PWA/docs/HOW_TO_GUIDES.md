@@ -5,7 +5,7 @@ Version: `0.0.1`
 ## How To Check The Version API
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:3000/api/version
+Invoke-RestMethod http://127.0.0.1:3015/api/version
 ```
 
 ## How To Check Worker Status Through The PWA
@@ -13,7 +13,7 @@ Invoke-RestMethod http://127.0.0.1:3000/api/version
 Start the Python worker, then run:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:3000/api/status
+Invoke-RestMethod http://127.0.0.1:3015/api/status
 ```
 
 ## How To Build For Production
@@ -30,7 +30,7 @@ npm start
 Set the tunnel origin service to:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3015
 ```
 
 ## How To Install On Android
@@ -44,7 +44,7 @@ http://127.0.0.1:3000
    address bar.
 
 Android install requires HTTPS, a valid manifest, app icons, and a registered
-service worker. Local `http://127.0.0.1:3000` is useful for development but is
+service worker. Local `http://127.0.0.1:3015` is useful for development but is
 not the real Android install target.
 
 ## How To Check Push Readiness

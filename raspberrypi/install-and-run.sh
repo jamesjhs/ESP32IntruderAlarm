@@ -141,5 +141,5 @@ fi
 log "Deployment complete"
 printf 'Python worker: systemctl status %s.service\n' "${WORKER_SERVICE}"
 printf 'PWA service:    pm2 status %s\n' "${PWA_PM2_NAME}"
-printf 'PWA URL:        http://127.0.0.1:3000\n'
-printf 'ESP32 ingest:   http://<pi-lan-ip>:1000/espdata\n'
+printf 'PWA URL:        http://127.0.0.1:3015\n'
+printf 'ESP32 ingest:   http://<pi-lan-ip>:3005/espdata\n'

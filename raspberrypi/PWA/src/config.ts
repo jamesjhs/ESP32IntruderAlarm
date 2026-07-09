@@ -15,8 +15,8 @@ export function loadConfig(): AppConfig {
   return {
     version: process.env.APP_VERSION ?? "0.0.1",
     host: process.env.PWA_HOST ?? "127.0.0.1",
-    port: Number(process.env.PWA_PORT ?? "3000"),
-    workerInternalUrl: process.env.WORKER_INTERNAL_URL ?? "http://127.0.0.1:1000",
+    port: Number(process.env.PWA_PORT ?? "3015"),
+    workerInternalUrl: process.env.WORKER_INTERNAL_URL ?? "http://127.0.0.1:3005",
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? ""
   };
 }

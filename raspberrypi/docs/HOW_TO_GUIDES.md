@@ -32,7 +32,7 @@ newer.
 Check:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:1000/healthz
+Invoke-RestMethod http://127.0.0.1:3005/healthz
 ```
 
 ## How To Run The PWA Service
@@ -57,14 +57,14 @@ npm start
 Check:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:3000/api/version
+Invoke-RestMethod http://127.0.0.1:3015/api/version
 ```
 
 ## How To Send A Test ESP32 Packet
 
 ```powershell
 Invoke-RestMethod `
-  -Uri http://127.0.0.1:1000/espdata `
+  -Uri http://127.0.0.1:3005/espdata `
   -Method Post `
   -ContentType application/json `
   -Body '{"device_id":0,"name":"Movement00","ip":"192.168.1.42","movement_score":0.25,"movement_detected":false}'
@@ -73,7 +73,7 @@ Invoke-RestMethod `
 Then open:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:1000/internal/status
+Invoke-RestMethod http://127.0.0.1:3005/internal/status
 ```
 
 ## How To Point Cloudflare Tunnel
@@ -81,7 +81,7 @@ Invoke-RestMethod http://127.0.0.1:1000/internal/status
 Set the tunnel service target to:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3015
 ```
 
-Do not route `:1000` or `/espdata` through Cloudflare.
+Do not route `:3005` or `/espdata` through Cloudflare.

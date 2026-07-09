@@ -26,5 +26,5 @@ Restart the worker.
 ## How To Check Node State
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:1000/internal/status
+Invoke-RestMethod http://127.0.0.1:3005/internal/status
 ```

@@ -42,7 +42,7 @@ def load_config() -> WorkerConfig:
     return WorkerConfig(
         version=os.getenv("APP_VERSION", "0.0.1"),
         host=os.getenv("WORKER_HOST", "0.0.0.0"),
-        port=int(os.getenv("WORKER_PORT", "1000")),
+        port=int(os.getenv("WORKER_PORT", "3005")),
         telemetry_path=telemetry_path,
         udp_probe_enabled=_bool_env("UDP_PROBE_ENABLED", False),
         udp_probe_target_ip=os.getenv("UDP_PROBE_TARGET_IP", ""),
