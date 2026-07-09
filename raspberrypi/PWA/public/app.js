@@ -35,6 +35,26 @@ const SECURITY_LABELS = {
 let currentAdmin = null;
 let pendingHostVersion = null;
 
+function apiUnavailableMessage(error) {
+  if (String(error?.message || "").includes("Not Found")) {
+    return "Admin API unavailable. Rebuild and restart the PWA server so the new routes are active.";
+  }
+  return error?.message || "Request failed.";
+}
+
+async function runAction(action, successMessage) {
+  try {
+    const result = await action();
+    if (successMessage) {
+      setMessage(typeof successMessage === "function" ? successMessage(result) : successMessage);
+    }
+    return result;
+  } catch (error) {
+    setMessage(apiUnavailableMessage(error));
+    return null;
+  }
+}
+
 function appendText(parent, tagName, text, className) {
   const element = document.createElement(tagName);
   element.textContent = text;
@@ -416,72 +436,84 @@ document.querySelector("#mandatory-refresh").addEventListener("click", refreshAp
 userFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(userFormEl);
-  await postJson("/api/admin/users", Object.fromEntries(form.entries()));
-  userFormEl.reset();
-  setMessage("User added.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await postJson("/api/admin/users", Object.fromEntries(form.entries()));
+    userFormEl.reset();
+    await refreshAdmin();
+  }, "User added.");
 });
 
 usersListEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formEl = event.target;
   const form = new FormData(formEl);
-  await putJson(`/api/admin/users/${formEl.dataset.id}`, Object.fromEntries(form.entries()));
-  setMessage("User saved.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await putJson(`/api/admin/users/${formEl.dataset.id}`, Object.fromEntries(form.entries()));
+    await refreshAdmin();
+  }, "User saved.");
 });
 
 usersListEl.addEventListener("click", async (event) => {
   const id = event.target.dataset?.deleteUser;
   if (!id) return;
-  await readJson(`/api/admin/users/${id}`, { method: "DELETE" });
-  setMessage("User deleted.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await readJson(`/api/admin/users/${id}`, { method: "DELETE" });
+    await refreshAdmin();
+  }, "User deleted.");
 });
 
 adminNodesListEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formEl = event.target;
   const form = new FormData(formEl);
-  await putJson(`/api/admin/nodes/${formEl.dataset.id}`, {
-    name: form.get("name"),
-    expected: form.get("expected") === "on",
-    active: form.get("active") === "on"
-  });
-  setMessage("Node saved.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await putJson(`/api/admin/nodes/${formEl.dataset.id}`, {
+      name: form.get("name"),
+      expected: form.get("expected") === "on",
+      active: form.get("active") === "on"
+    });
+    await refreshAdmin();
+  }, "Node saved.");
 });
 
 document.querySelector("#generate-vapid").addEventListener("click", async () => {
-  await postJson("/api/admin/vapid/generate");
-  setMessage("VAPID keys generated.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await postJson("/api/admin/vapid/generate");
+    await refreshAdmin();
+  }, "VAPID keys generated.");
 });
 
 vapidFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(vapidFormEl);
-  await postJson("/api/admin/vapid", Object.fromEntries(form.entries()));
-  setMessage("VAPID keys saved.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await postJson("/api/admin/vapid", Object.fromEntries(form.entries()));
+    await refreshAdmin();
+  }, "VAPID keys saved.");
 });
 
 document.querySelector("#subscribe-push").addEventListener("click", async () => {
-  await subscribePush();
-  setMessage("Device subscribed.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await subscribePush();
+    await refreshAdmin();
+  }, "Device subscribed.");
 });
 
 document.querySelector("#unsubscribe-push").addEventListener("click", async () => {
-  await unsubscribePush();
-  setMessage("Device unsubscribed.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await unsubscribePush();
+    await refreshAdmin();
+  }, "Device unsubscribed.");
 });
 
 document.querySelector("#test-push").addEventListener("click", async () => {
-  const result = await postJson("/api/push/test", {});
-  setMessage(result.skipped ? "Push skipped because VAPID is not configured." : `Push sent to ${result.sent} device(s).`);
-  await refreshAdmin();
+  await runAction(async () => {
+    const result = await postJson("/api/push/test", {});
+    await refreshAdmin();
+    return result;
+  }, (result) =>
+    result.skipped ? "Push skipped because VAPID is not configured." : `Push sent to ${result.sent} device(s).`
+  );
 });
 
 document.querySelector("#save-security").addEventListener("click", async () => {
@@ -490,15 +522,18 @@ document.querySelector("#save-security").addEventListener("click", async () => {
   for (const key of Object.keys(SECURITY_LABELS)) {
     settings[key] = form.get(key) === "on";
   }
-  await postJson("/api/admin/security", settings);
-  setMessage("Security settings saved.");
-  await refreshAdmin();
+  await runAction(async () => {
+    await postJson("/api/admin/security", settings);
+    await refreshAdmin();
+  }, "Security settings saved.");
 });
 
 document.querySelector("#backup-db").addEventListener("click", async () => {
-  const result = await postJson("/api/admin/backup");
-  setMessage(`Backup created: ${result.path}`);
-  await refreshAdmin();
+  await runAction(async () => {
+    const result = await postJson("/api/admin/backup");
+    await refreshAdmin();
+    return result;
+  }, (result) => `Backup created: ${result.path}`);
 });
 
 if ("serviceWorker" in navigator) {

@@ -6,6 +6,7 @@ const STATIC_ASSETS = [
   "/",
   "/index.html",
   "/styles.css",
+  "/app-config.js",
   "/app.js",
   `/manifest.webmanifest${ASSET_VERSION}`,
   `/favicon.png${ASSET_VERSION}`,
