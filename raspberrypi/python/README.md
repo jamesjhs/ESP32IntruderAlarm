@@ -41,6 +41,7 @@ defaults.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/` | Human-readable landing page showing worker status and known nodes. |
 | `GET` | `/healthz` | Process health check. |
 | `POST` | `/espdata` | ESP32 telemetry ingest. |
 | `GET` | `/internal/status` | Live node state for the PWA service. |

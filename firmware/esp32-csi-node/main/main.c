@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +62,8 @@
 #define MOVEMENT_LED_GPIO GPIO_NUM_2
 #define MOVEMENT_LED_ON_LEVEL 1
 #define MOVEMENT_LED_OFF_LEVEL 0
+#define LOG_LINE_COUNT 100
+#define LOG_LINE_LEN 192
 
 typedef enum {
     SENSE_IDLE = 0,
@@ -151,11 +154,57 @@ static volatile uint32_t csi_throttled_samples;
 static volatile uint32_t csi_queue_drops;
 static volatile uint32_t csi_accepted_samples;
 static volatile bool calibration_requested;
+static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
+static vprintf_like_t original_log_vprintf;
+static char log_lines[LOG_LINE_COUNT][LOG_LINE_LEN];
+static size_t log_next_line;
+static size_t log_line_count;
 
 typedef struct {
     uint32_t ip;
     uint32_t netmask;
 } discovery_request_t;
+
+static void trim_log_line(char *line)
+{
+    size_t len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[len - 1] = '\0';
+        len--;
+    }
+}
+
+static int captured_log_vprintf(const char *format, va_list args)
+{
+    char line[LOG_LINE_LEN];
+    line[0] = '\0';
+    va_list capture_args;
+    va_copy(capture_args, args);
+    int result = vsnprintf(line, sizeof(line), format, capture_args);
+    va_end(capture_args);
+    trim_log_line(line);
+
+    portENTER_CRITICAL(&log_lock);
+    strlcpy(log_lines[log_next_line], line, sizeof(log_lines[log_next_line]));
+    log_next_line = (log_next_line + 1U) % LOG_LINE_COUNT;
+    if (log_line_count < LOG_LINE_COUNT) {
+        log_line_count++;
+    }
+    portEXIT_CRITICAL(&log_lock);
+
+    if (original_log_vprintf != NULL) {
+        va_list original_args;
+        va_copy(original_args, args);
+        result = original_log_vprintf(format, original_args);
+        va_end(original_args);
+    }
+    return result;
+}
+
+static void install_log_capture(void)
+{
+    original_log_vprintf = esp_log_set_vprintf(captured_log_vprintf);
+}
 
 /**
  * Introduction:
@@ -1942,6 +1991,33 @@ static esp_err_t options_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
+static esp_err_t log_get_handler(httpd_req_t *req)
+{
+    char (*snapshot)[LOG_LINE_LEN] = calloc(LOG_LINE_COUNT, LOG_LINE_LEN);
+    if (snapshot == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Log snapshot allocation failed");
+        return ESP_FAIL;
+    }
+
+    portENTER_CRITICAL(&log_lock);
+    size_t count = log_line_count;
+    size_t first = (log_next_line + LOG_LINE_COUNT - count) % LOG_LINE_COUNT;
+    for (size_t i = 0; i < count; i++) {
+        size_t idx = (first + i) % LOG_LINE_COUNT;
+        strlcpy(snapshot[i], log_lines[idx], LOG_LINE_LEN);
+    }
+    portEXIT_CRITICAL(&log_lock);
+
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    for (size_t i = 0; i < count; i++) {
+        httpd_resp_send_chunk(req, snapshot[i], HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send_chunk(req, "\n", 1);
+    }
+    free(snapshot);
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 static esp_err_t calibrate_post_handler(httpd_req_t *req)
 {
     calibration_requested = true;
@@ -2040,7 +2116,7 @@ static void start_http_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 14;
 
     ESP_ERROR_CHECK(httpd_start(&http_server, &config));
 
@@ -2053,6 +2129,8 @@ static void start_http_server(void)
     httpd_uri_t calibrate = {.uri = "/api/calibrate", .method = HTTP_POST, .handler = calibrate_post_handler};
     httpd_uri_t provision = {.uri = "/api/provision", .method = HTTP_POST, .handler = provision_post_handler};
     httpd_uri_t reset_wifi = {.uri = "/api/reset-wifi", .method = HTTP_POST, .handler = reset_wifi_post_handler};
+    httpd_uri_t log_slash = {.uri = "/log/", .method = HTTP_GET, .handler = log_get_handler};
+    httpd_uri_t log = {.uri = "/log", .method = HTTP_GET, .handler = log_get_handler};
     httpd_uri_t captive = {.uri = "/*", .method = HTTP_GET, .handler = captive_get_handler};
 
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &root));
@@ -2064,6 +2142,8 @@ static void start_http_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibrate));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &provision));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &reset_wifi));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &log_slash));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &log));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &captive));
 }
 
@@ -2081,6 +2161,8 @@ static void start_http_server(void)
  */
 void app_main(void)
 {
+    install_log_capture();
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
