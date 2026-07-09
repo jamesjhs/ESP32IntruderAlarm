@@ -1,0 +1,47 @@
+{
+  "id": "/",
+  "name": "ESP32 Intruder Alarm",
+  "short_name": "Alarm",
+  "description": "Private Raspberry Pi dashboard for ESP32 Wi-Fi CSI alarm monitoring.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f5f7fb",
+  "theme_color": "#18212f",
+  "lang": "en-GB",
+  "categories": ["security", "utilities", "home"],
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "/icons/icon-72x72.png?v=0.0.1", "sizes": "72x72", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-96x96.png?v=0.0.1", "sizes": "96x96", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-128x128.png?v=0.0.1", "sizes": "128x128", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-144x144.png?v=0.0.1", "sizes": "144x144", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-152x152.png?v=0.0.1", "sizes": "152x152", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-180x180.png?v=0.0.1", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-192x192.png?v=0.0.1", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-384x384.png?v=0.0.1", "sizes": "384x384", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512x512.png?v=0.0.1", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-icon-192x192.png?v=0.0.1", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-icon-512x512.png?v=0.0.1", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/notification-badge-72x72.png?v=0.0.1", "sizes": "72x72", "type": "image/png", "purpose": "monochrome" },
+    { "src": "/icons/notification-badge-96x96.png?v=0.0.1", "sizes": "96x96", "type": "image/png", "purpose": "monochrome" },
+    { "src": "/icons/notification-badge-128x128.png?v=0.0.1", "sizes": "128x128", "type": "image/png", "purpose": "monochrome" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Live Status",
+      "short_name": "Status",
+      "description": "Open the live alarm dashboard.",
+      "url": "/?view=status",
+      "icons": [{ "src": "/icons/icon-96x96.png?v=0.0.1", "sizes": "96x96", "type": "image/png" }]
+    },
+    {
+      "name": "Events",
+      "short_name": "Events",
+      "description": "Open alarm and node event history.",
+      "url": "/?view=events",
+      "icons": [{ "src": "/icons/icon-96x96.png?v=0.0.1", "sizes": "96x96", "type": "image/png" }]
+    }
+  ]
+}

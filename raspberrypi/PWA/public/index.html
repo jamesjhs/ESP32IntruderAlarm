@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#18212f">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="ESP32 Alarm">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/manifest.webmanifest?v=0.0.1">
+    <link rel="icon" type="image/png" href="/favicon.png?v=0.0.1">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=0.0.1">
+    <link rel="stylesheet" href="/styles.css?v=0.0.1">
+    <title>ESP32 Intruder Alarm</title>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Raspberry Pi alarm server</p>
+          <h1>ESP32 Intruder Alarm</h1>
+        </div>
+        <span id="version" class="badge">0.0.1</span>
+      </section>
+
+      <section class="status-grid" aria-live="polite">
+        <article class="panel">
+          <h2>System</h2>
+          <dl>
+            <div><dt>PWA service</dt><dd id="pwa-state">checking</dd></div>
+            <div><dt>Worker</dt><dd id="worker-state">checking</dd></div>
+            <div><dt>Service worker</dt><dd id="sw-state">checking</dd></div>
+            <div><dt>Push support</dt><dd id="push-state">checking</dd></div>
+            <div><dt>Known nodes</dt><dd id="known-nodes">0</dd></div>
+            <div><dt>Healthy nodes</dt><dd id="healthy-nodes">0</dd></div>
+          </dl>
+        </article>
+
+        <article class="panel">
+          <h2>ESP32 Nodes</h2>
+          <div id="nodes" class="nodes empty">No node telemetry yet.</div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
