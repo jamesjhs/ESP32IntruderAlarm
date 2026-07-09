@@ -15,6 +15,17 @@
     <title>ESP32 Intruder Alarm</title>
   </head>
   <body>
+    <div id="update-banner" class="update-banner hidden">
+      <span id="update-message">Update available</span>
+      <button id="refresh-app" type="button">Refresh</button>
+    </div>
+    <div id="mandatory-update" class="mandatory-update hidden">
+      <div class="modal">
+        <h2>Update Required</h2>
+        <p>The alarm dashboard must refresh before sensitive actions are available.</p>
+        <button id="mandatory-refresh" type="button">Refresh Now</button>
+      </div>
+    </div>
     <main class="shell">
       <section class="topbar">
         <div>
@@ -42,8 +53,67 @@
           <div id="nodes" class="nodes empty">No node telemetry yet.</div>
         </article>
       </section>
+
+      <section class="admin-grid">
+        <article class="panel" id="users">
+          <h2>Users & Roles</h2>
+          <form id="user-form" class="inline-form">
+            <input name="username" placeholder="username" autocomplete="off">
+            <input name="displayName" placeholder="display name" autocomplete="off">
+            <select name="role">
+              <option value="viewer">viewer</option>
+              <option value="resident">resident</option>
+              <option value="admin">admin</option>
+              <option value="owner">owner</option>
+            </select>
+            <button type="submit">Add</button>
+          </form>
+          <div id="users-list" class="records"></div>
+        </article>
+
+        <article class="panel" id="vapid">
+          <h2>VAPID & Push</h2>
+          <div class="actions">
+            <button id="generate-vapid" type="button">Generate Keys</button>
+            <button id="subscribe-push" type="button">Subscribe Device</button>
+            <button id="unsubscribe-push" type="button">Unsubscribe</button>
+            <button id="test-push" type="button">Send Test</button>
+          </div>
+          <dl>
+            <div><dt>Configured</dt><dd id="vapid-configured">unknown</dd></div>
+            <div><dt>Subscriptions</dt><dd id="push-count">0</dd></div>
+          </dl>
+          <div id="push-subscriptions" class="records"></div>
+        </article>
+
+        <article class="panel" id="admin-nodes">
+          <h2>Node Registry</h2>
+          <div id="admin-nodes-list" class="records"></div>
+        </article>
+
+        <article class="panel" id="security">
+          <h2>Security Settings</h2>
+          <form id="security-form" class="toggles"></form>
+          <div class="actions">
+            <button id="save-security" type="button">Save Settings</button>
+            <button id="backup-db" type="button">Create Backup</button>
+          </div>
+          <p id="admin-message" class="message"></p>
+        </article>
+
+        <article class="panel" id="events">
+          <h2>Recent Events</h2>
+          <div id="events-list" class="records"></div>
+        </article>
+
+        <article class="panel">
+          <h2>Audit Log</h2>
+          <div id="audit-list" class="records"></div>
+        </article>
+      </section>
     </main>
 
+    <script src="/app-config.js"></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

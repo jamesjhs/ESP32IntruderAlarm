@@ -1,19 +1,113 @@
 import path from "node:path";
+import fs from "node:fs/promises";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
+import webpush from "web-push";
 
 import { loadConfig } from "./config";
+import { AlarmDatabase, SecuritySettings, UserRole } from "./db";
 
 const appConfig = loadConfig();
+const publicDir = path.resolve(__dirname, "..", "public");
+const db = new AlarmDatabase(appConfig.databasePath, appConfig.sqlCipherKey);
+
+type PushSubscriptionBody = {
+  endpoint?: string;
+  keys?: {
+    p256dh?: string;
+    auth?: string;
+  };
+  deviceName?: string;
+  userId?: number | null;
+};
+
+function validRole(role: unknown): role is UserRole {
+  return role === "owner" || role === "admin" || role === "resident" || role === "viewer";
+}
+
+function configureWebPush() {
+  const vapid = db.getVapidPrivateSettings();
+  if (vapid.publicKey && vapid.privateKey) {
+    webpush.setVapidDetails(vapid.subject || appConfig.vapidSubject, vapid.publicKey, vapid.privateKey);
+    return true;
+  }
+  return false;
+}
+
+function normalizePushSubscription(row: { endpoint: string; p256dh: string; auth: string }) {
+  return {
+    endpoint: row.endpoint,
+    keys: {
+      p256dh: row.p256dh,
+      auth: row.auth
+    }
+  };
+}
+
+async function sendPushToEnabledSubscriptions(payload: unknown) {
+  if (!configureWebPush()) {
+    return { sent: 0, failed: 0, skipped: true };
+  }
+
+  let sent = 0;
+  let failed = 0;
+  for (const subscription of db.listEnabledPushSubscriptions()) {
+    try {
+      await webpush.sendNotification(normalizePushSubscription(subscription), JSON.stringify(payload));
+      sent += 1;
+    } catch (error: any) {
+      failed += 1;
+      const statusCode = Number(error?.statusCode ?? 0);
+      const message = String(error?.body || error?.message || "push send failed");
+      if (statusCode === 404 || statusCode === 410) {
+        db.deletePushSubscription(subscription.endpoint);
+      } else {
+        db.disablePushSubscription(subscription.endpoint, message);
+      }
+    }
+  }
+  return { sent, failed, skipped: false };
+}
+
+async function renderVersionedAsset(fileName: string) {
+  const filePath = path.join(publicDir, fileName);
+  const text = await fs.readFile(filePath, "utf8");
+  if (fileName === "service-worker.js") {
+    return text.replace('const APP_VERSION = "0.0.1";', `const APP_VERSION = ${JSON.stringify(appConfig.version)};`);
+  }
+  return text.replaceAll("?v=0.0.1", `?v=${appConfig.version}`);
+}
+
+function syncWorkerNodes(status: any) {
+  for (const node of status?.nodes ?? []) {
+    db.upsertNode({
+      deviceId: Number(node.device_id),
+      name: String(node.name ?? `Movement${Number(node.device_id).toString(16).padStart(2, "0")}`),
+      ip: String(node.ip ?? ""),
+      active: node.state === "online",
+      payload: node.payload ?? {}
+    });
+  }
+}
 
 export function buildServer() {
   const server = Fastify({
     logger: true
   });
 
-  server.register(fastifyStatic, {
-    root: path.resolve(__dirname, "..", "public"),
-    prefix: "/"
+  server.get("/service-worker.js", async (_request, reply) => {
+    reply.type("application/javascript; charset=utf-8").header("Cache-Control", "no-store");
+    return renderVersionedAsset("service-worker.js");
+  });
+
+  server.get("/manifest.webmanifest", async (_request, reply) => {
+    reply.type("application/manifest+json; charset=utf-8").header("Cache-Control", "no-store");
+    return renderVersionedAsset("manifest.webmanifest");
+  });
+
+  server.get("/app-config.js", async (_request, reply) => {
+    reply.type("application/javascript; charset=utf-8").header("Cache-Control", "no-store");
+    return `window.ALARM_APP_CONFIG = ${JSON.stringify({ version: appConfig.version, build: appConfig.build })};`;
   });
 
   server.get("/api/healthz", async () => ({
@@ -24,9 +118,9 @@ export function buildServer() {
 
   server.get("/api/version", async () => ({
     version: appConfig.version,
-    build: null,
+    build: appConfig.build,
     mandatory: false,
-    notes: "Initial Raspberry Pi server-side scaffold"
+    notes: "Persistent admin, VAPID, and PWA update enforcement"
   }));
 
   server.get("/api/status", async (_request, reply) => {
@@ -44,13 +138,165 @@ export function buildServer() {
       };
     }
 
-    return response.json();
+    const status = await response.json();
+    syncWorkerNodes(status);
+    return status;
   });
 
   server.get("/api/push/vapid-public-key", async () => ({
-    configured: appConfig.vapidPublicKey.length > 0,
-    publicKey: appConfig.vapidPublicKey
+    configured: db.getVapidSettings().publicKey.length > 0,
+    publicKey: db.getVapidSettings().publicKey
   }));
+
+  server.post<{ Body: PushSubscriptionBody }>("/api/push/subscribe", async (request, reply) => {
+    const body = request.body;
+    if (!body?.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
+      reply.code(400);
+      return { ok: false, error: "endpoint, keys.p256dh, and keys.auth are required" };
+    }
+    db.upsertPushSubscription({
+      endpoint: body.endpoint,
+      keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+      deviceName: body.deviceName,
+      userId: body.userId
+    });
+    return { ok: true };
+  });
+
+  server.post<{ Body: { endpoint?: string } }>("/api/push/unsubscribe", async (request, reply) => {
+    if (!request.body?.endpoint) {
+      reply.code(400);
+      return { ok: false, error: "endpoint is required" };
+    }
+    db.deletePushSubscription(request.body.endpoint);
+    return { ok: true };
+  });
+
+  server.post<{ Body: { title?: string; body?: string; severity?: string } }>("/api/push/test", async (request) => {
+    const eventId = db.createEvent({
+      type: "push_test",
+      severity: request.body?.severity ?? "info",
+      title: request.body?.title ?? "ESP32 alarm push test",
+      body: request.body?.body ?? "Push delivery is configured."
+    });
+    const result = await sendPushToEnabledSubscriptions({
+      type: "push_test",
+      severity: request.body?.severity ?? "info",
+      event_id: String(eventId),
+      title: request.body?.title ?? "ESP32 alarm push test",
+      body: request.body?.body ?? "Push delivery is configured.",
+      timestamp_ms: Date.now(),
+      url: "/#events"
+    });
+    return { ok: true, eventId, ...result };
+  });
+
+  server.get("/api/admin/summary", async () => ({
+    users: db.listUsers(),
+    vapid: db.getVapidSettings(),
+    pushSubscriptions: db.listPushSubscriptions(),
+    nodes: db.listNodes(),
+    security: db.getSecuritySettings(),
+    events: db.recentEvents(25),
+    auditLog: db.auditLog(25)
+  }));
+
+  server.post<{ Body: { username?: string; displayName?: string; role?: string; state?: string } }>(
+    "/api/admin/users",
+    async (request, reply) => {
+      const role = request.body?.role;
+      if (!request.body?.username || !request.body.displayName || !validRole(role)) {
+        reply.code(400);
+        return { ok: false, error: "username, displayName, and valid role are required" };
+      }
+      const id = db.createUser({
+        username: request.body.username,
+        displayName: request.body.displayName,
+        role,
+        state: request.body.state
+      });
+      return { ok: true, id };
+    }
+  );
+
+  server.put<{ Params: { id: string }; Body: { displayName?: string; role?: string; state?: string } }>(
+    "/api/admin/users/:id",
+    async (request, reply) => {
+      const role = request.body?.role;
+      if (!request.body?.displayName || !request.body.state || !validRole(role)) {
+        reply.code(400);
+        return { ok: false, error: "displayName, state, and valid role are required" };
+      }
+      db.updateUser(Number(request.params.id), {
+        displayName: request.body.displayName,
+        role,
+        state: request.body.state
+      });
+      return { ok: true };
+    }
+  );
+
+  server.delete<{ Params: { id: string } }>("/api/admin/users/:id", async (request) => {
+    db.deleteUser(Number(request.params.id));
+    return { ok: true };
+  });
+
+  server.post<{ Body: { publicKey?: string; privateKey?: string; subject?: string } }>(
+    "/api/admin/vapid",
+    async (request, reply) => {
+      if (!request.body?.publicKey || !request.body.privateKey) {
+        reply.code(400);
+        return { ok: false, error: "publicKey and privateKey are required" };
+      }
+      db.saveVapidSettings({
+        publicKey: request.body.publicKey,
+        privateKey: request.body.privateKey,
+        subject: request.body.subject || appConfig.vapidSubject
+      });
+      return { ok: true, vapid: db.getVapidSettings() };
+    }
+  );
+
+  server.post("/api/admin/vapid/generate", async () => {
+    const keys = webpush.generateVAPIDKeys();
+    db.saveVapidSettings({
+      publicKey: keys.publicKey,
+      privateKey: keys.privateKey,
+      subject: appConfig.vapidSubject
+    });
+    return { ok: true, vapid: db.getVapidSettings() };
+  });
+
+  server.put<{ Params: { id: string }; Body: { name?: string; expected?: boolean; active?: boolean } }>(
+    "/api/admin/nodes/:id",
+    async (request, reply) => {
+      if (!request.body?.name || typeof request.body.expected !== "boolean" || typeof request.body.active !== "boolean") {
+        reply.code(400);
+        return { ok: false, error: "name, expected, and active are required" };
+      }
+      db.updateNode(Number(request.params.id), {
+        name: request.body.name,
+        expected: request.body.expected,
+        active: request.body.active
+      });
+      return { ok: true };
+    }
+  );
+
+  server.post<{ Body: SecuritySettings }>("/api/admin/security", async (request) => {
+    db.saveSecuritySettings(request.body);
+    return { ok: true, security: db.getSecuritySettings() };
+  });
+
+  server.post("/api/admin/backup", async () => ({
+    ok: true,
+    path: db.backup(appConfig.backupDir)
+  }));
+
+  server.register(fastifyStatic, {
+    root: publicDir,
+    prefix: "/"
+  });
 
   return server;
 }

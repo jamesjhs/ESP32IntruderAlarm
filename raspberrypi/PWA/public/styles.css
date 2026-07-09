@@ -13,6 +13,73 @@ body {
   margin: 0;
 }
 
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #cad3df;
+  background: #18212f;
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+input,
+select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cad3df;
+  border-radius: 6px;
+  padding: 8px;
+  background: #ffffff;
+  color: #18212f;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.update-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #f7d154;
+  color: #18212f;
+  border-bottom: 1px solid #d7ad22;
+  font-weight: 700;
+}
+
+.mandatory-update {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(24, 33, 47, 0.72);
+}
+
+.modal {
+  width: min(420px, 100%);
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 22px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.22);
+}
+
+.modal p {
+  color: #53606f;
+}
+
 .shell {
   width: min(1080px, calc(100% - 32px));
   margin: 0 auto;
@@ -63,6 +130,13 @@ h2 {
   gap: 16px;
 }
 
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
 .panel {
   background: #ffffff;
   border: 1px solid #d9e0ea;
@@ -100,13 +174,19 @@ dd {
   gap: 10px;
 }
 
+.records {
+  display: grid;
+  gap: 10px;
+}
+
 .nodes.empty {
   color: #53606f;
 }
 
-.node {
+.node,
+.record,
+.record-grid {
   display: grid;
-  grid-template-columns: 1fr repeat(3, auto);
   gap: 12px;
   align-items: center;
   border: 1px solid #edf1f5;
@@ -114,13 +194,77 @@ dd {
   padding: 10px;
 }
 
+.node {
+  grid-template-columns: 1fr repeat(3, auto);
+}
+
+.record-grid {
+  grid-template-columns: minmax(110px, 1fr) repeat(4, minmax(0, 140px));
+}
+
+.node-row {
+  grid-template-columns: 90px minmax(140px, 1fr) repeat(2, 110px) 80px minmax(160px, 1fr);
+}
+
 .node span {
+  color: #53606f;
+}
+
+.record span,
+.record small,
+.record-grid small {
+  color: #53606f;
+  overflow-wrap: anywhere;
+}
+
+.inline-form,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.inline-form input {
+  flex: 1 1 150px;
+}
+
+.inline-form select {
+  flex: 0 1 130px;
+}
+
+.toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.toggles label,
+.node-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #53606f;
+}
+
+.toggles input,
+.node-row input[type="checkbox"] {
+  width: auto;
+}
+
+.message {
+  min-height: 1.4em;
   color: #53606f;
 }
 
 @media (max-width: 760px) {
   .status-grid,
-  .node {
+  .admin-grid,
+  .node,
+  .record-grid,
+  .node-row,
+  .toggles {
     grid-template-columns: 1fr;
   }
 
