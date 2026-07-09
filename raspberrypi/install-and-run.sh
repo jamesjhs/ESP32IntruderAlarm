@@ -52,6 +52,12 @@ require_command python3
 require_command node
 require_command npm
 
+python3 - <<'PY'
+import sys
+if sys.version_info < (3, 9):
+    raise SystemExit("Python 3.9 or newer is required for the ESP32 alarm worker.")
+PY
+
 if [[ ! -f "${ENV_FILE}" ]]; then
   if [[ -f "${ENV_EXAMPLE}" ]]; then
     log "Creating ${ENV_FILE} from .env.example"

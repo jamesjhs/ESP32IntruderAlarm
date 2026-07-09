@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -47,7 +47,7 @@ class NodeStore:
         self._nodes[device_id] = snapshot
         return snapshot
 
-    def get(self, device_id: int) -> NodeSnapshot | None:
+    def get(self, device_id: int) -> Optional[NodeSnapshot]:
         return self._nodes.get(device_id)
 
     def all(self) -> list[NodeSnapshot]:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from contextlib import suppress
-from typing import Any
+from typing import Any, Optional
 
 from aiohttp import web
 
@@ -22,7 +22,7 @@ async def udp_probe_loop(config: WorkerConfig) -> None:
             await asyncio.sleep(max(1.0, config.udp_probe_interval_seconds))
 
 
-def make_app(config: WorkerConfig | None = None) -> web.Application:
+def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
     config = config or load_config()
     store = NodeStore()
     app = web.Application()

@@ -22,6 +22,9 @@ pip check
 python -m esp32_alarm_worker.server
 ```
 
+The worker supports Python `3.9` or newer. If the install fails while fetching
+build dependencies, check the active interpreter with `python3 --version`.
+
 Check:
 
 ```powershell

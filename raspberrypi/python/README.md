@@ -11,10 +11,10 @@ traffic on a timer.
 
 Supported runtime:
 
-- Python `>=3.11`
+- Python `>=3.9`
 - Current dependency minimums: `aiohttp>=3.14.1,<4` and
   `python-dotenv>=1.2.2,<2`
-- Build backend: `setuptools>=83.0.0`
+- Build backend: `setuptools>=68,<83`
 
 ```powershell
 cd raspberrypi\python
