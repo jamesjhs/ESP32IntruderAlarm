@@ -52,6 +52,46 @@ const SECURITY_LABELS = {
   }
 };
 
+const NODE_STATUS_HELP = {
+  sensing_state: "Current firmware sensing mode: idle, boost, or cooldown.",
+  sample_rate_hz: "Current target CSI sampling rate selected by the ESP32 sensing state.",
+  accepted_csi_rate_hz: "CSI packets accepted into feature processing per second after filtering/throttling.",
+  movement_score: "Fused movement score from CSI feature changes. Higher values mean stronger movement evidence.",
+  movement_detected: "Final firmware movement flag after confirmation windows and state logic.",
+  baseline_noise: "Current estimate of still-room CSI noise used to judge movement against the baseline.",
+  confirm_windows: "Recent feature windows above the movement threshold.",
+  quiet_windows: "Recent feature windows below the settle threshold.",
+  rssi: "Received signal strength for the Wi-Fi packets feeding CSI.",
+  noise_floor: "Radio noise floor reported by the ESP32 Wi-Fi stack.",
+  packet_count: "Total CSI packet count seen by the node since boot.",
+  last_packet_ms: "Milliseconds since the last accepted packet.",
+  calibrating: "Whether the node is currently recording a quiet baseline."
+};
+
+const NODE_CONFIG_HELP = {
+  device_id: "Logical ESP32 node number. Keep each installed node unique.",
+  name: "Display and hostname-style label for this ESP32 node.",
+  pi_ip: "LAN IP address of the Raspberry Pi telemetry receiver.",
+  pi_port: "Port on the Pi worker that accepts ESP32 telemetry posts.",
+  pi_api_path: "HTTP path on the Pi worker for telemetry, normally /espdata.",
+  pi_post_interval_s: "How often this ESP32 posts compact telemetry to the Pi.",
+  idle_rate_hz: "Low-rate CSI sampling target used during quiet monitoring.",
+  boost_rate_hz: "Higher CSI sampling target used while movement evidence is active.",
+  movement_threshold: "Movement score level that marks a feature window as movement evidence.",
+  settle_threshold: "Score level considered quiet enough for cooldown/return-to-idle logic.",
+  motion_sensitivity: "Multiplier applied to the fused movement score before threshold comparison.",
+  boost_duration_s: "How long the node stays in boosted sensing after movement evidence.",
+  cooldown_s: "How long the node waits for quiet windows before returning to idle.",
+  feature_window_ms: "Feature aggregation window length used when scoring CSI changes."
+};
+
+const NODE_ACTION_HELP = {
+  refreshNodeStatus: "Fetch the latest live status directly from this ESP32 node through the Pi.",
+  calibrateNode: "Ask the ESP32 to record a fresh quiet baseline. Keep the area still while it runs.",
+  deleteNodeCalibration: "Clear the node's saved baseline so it can learn a new one.",
+  saveNodeConfig: "Send these configuration values to the ESP32 node's /api/config endpoint."
+};
+
 let currentAdmin = null;
 let pendingHostVersion = null;
 let lastStatusNodes = [];
@@ -95,6 +135,29 @@ function asNumber(value) {
 function formatScore(value) {
   const number = asNumber(value);
   return number === null ? "n/a" : number.toFixed(3);
+}
+
+function truncateToDecimals(value, decimals) {
+  const number = asNumber(value);
+  if (number === null) return null;
+  const factor = 10 ** decimals;
+  return Math.trunc((number + Number.EPSILON) * factor) / factor;
+}
+
+function formatTruncated(value, decimals) {
+  const number = truncateToDecimals(value, decimals);
+  return number === null ? "" : number.toFixed(decimals);
+}
+
+function appendHelp(parent, text) {
+  const help = document.createElement("span");
+  help.className = "hover-help";
+  help.tabIndex = 0;
+  help.setAttribute("aria-label", text);
+  help.dataset.tooltip = text;
+  help.textContent = "?";
+  parent.appendChild(help);
+  return help;
 }
 
 function nodeHasMovement(payload) {
@@ -192,6 +255,7 @@ function renderNodes(nodes) {
       active.checked = registryNode ? registryNode.active : node.state === "online";
       active.disabled = !registryNode;
       active.dataset.nodeRecordId = registryNode ? String(registryNode.id) : "";
+      active.title = "Include or exclude this ESP32 node from active monitoring decisions in the Pi dashboard.";
       activeLabel.appendChild(active);
       activeLabel.append(" Active");
       item.appendChild(activeLabel);
@@ -201,6 +265,7 @@ function renderNodes(nodes) {
       settings.className = "node-settings-button";
       settings.dataset.deviceId = String(node.device_id);
       settings.textContent = "Settings";
+      settings.title = "Open this ESP32 node's live status, calibration, and configuration controls.";
       item.appendChild(settings);
       return item;
     })
@@ -302,16 +367,36 @@ function renderSecurity(settings) {
       row.appendChild(checkbox);
       row.append(` ${option.label}`);
 
-      const help = document.createElement("span");
-      help.className = "hover-help";
-      help.tabIndex = 0;
-      help.setAttribute("aria-label", option.help);
-      help.dataset.tooltip = option.help;
-      help.textContent = "?";
-      row.appendChild(help);
+      appendHelp(row, option.help);
       return row;
     })
   );
+}
+
+function attachNodeSettingsHelp() {
+  for (const [name, help] of Object.entries(NODE_CONFIG_HELP)) {
+    const input = nodeConfigFormEl.elements[name];
+    const label = input?.closest("label");
+    if (label && !label.querySelector(".hover-help")) {
+      appendHelp(label, help);
+      input.title = help;
+    }
+  }
+
+  const actions = [
+    ["#close-node-settings", "Close this ESP32 node settings window."],
+    ["#refresh-node-status", NODE_ACTION_HELP.refreshNodeStatus],
+    ["#calibrate-node", NODE_ACTION_HELP.calibrateNode],
+    ["#delete-node-calibration", NODE_ACTION_HELP.deleteNodeCalibration],
+    ['#node-config-form button[type="submit"]', NODE_ACTION_HELP.saveNodeConfig]
+  ];
+  for (const [selector, help] of actions) {
+    const button = document.querySelector(selector);
+    if (button) {
+      button.title = help;
+      button.setAttribute("aria-label", help);
+    }
+  }
 }
 
 function renderRecords(target, records, emptyText) {
@@ -350,7 +435,8 @@ function renderNodeStatus(status) {
   nodeStatusDetailsEl.replaceChildren(
     ...keys.map((key) => {
       const row = document.createElement("div");
-      appendText(row, "dt", key);
+      const label = appendText(row, "dt", key);
+      appendHelp(label, NODE_STATUS_HELP[key] || "Live status value reported by the ESP32 node.");
       const value = status?.[key];
       const display = ["movement_score", "baseline_noise"].includes(key) ? formatScore(value) : String(value ?? "n/a");
       appendText(row, "dd", display);
@@ -363,7 +449,12 @@ function setFormNumber(form, name, value) {
   form.elements[name].value = value === undefined || value === null ? "" : String(value);
 }
 
+function setFormDecimal(form, name, value, decimals) {
+  form.elements[name].value = formatTruncated(value, decimals);
+}
+
 function populateNodeConfigForm(config) {
+  attachNodeSettingsHelp();
   nodeConfigFormEl.elements.device_id.value = config.device_id ?? "";
   nodeConfigFormEl.elements.name.value = config.name ?? "";
   nodeConfigFormEl.elements.pi_ip.value = config.pi_ip ?? "";
@@ -372,8 +463,8 @@ function populateNodeConfigForm(config) {
   setFormNumber(nodeConfigFormEl, "pi_post_interval_s", Math.round((Number(config.pi_post_interval_ms) || 5000) / 1000));
   setFormNumber(nodeConfigFormEl, "idle_rate_hz", config.idle_rate_hz);
   setFormNumber(nodeConfigFormEl, "boost_rate_hz", config.boost_rate_hz);
-  setFormNumber(nodeConfigFormEl, "movement_threshold", config.movement_threshold);
-  setFormNumber(nodeConfigFormEl, "settle_threshold", config.settle_threshold);
+  setFormDecimal(nodeConfigFormEl, "movement_threshold", config.movement_threshold, 2);
+  setFormDecimal(nodeConfigFormEl, "settle_threshold", config.settle_threshold, 2);
   setFormNumber(nodeConfigFormEl, "motion_sensitivity", config.motion_sensitivity);
   setFormNumber(nodeConfigFormEl, "boost_duration_s", Math.round((Number(config.boost_duration_ms) || 0) / 1000));
   setFormNumber(nodeConfigFormEl, "cooldown_s", Math.round((Number(config.cooldown_ms) || 0) / 1000));
@@ -392,8 +483,8 @@ function nodeConfigPayload() {
     pi_post_interval_ms: Number(form.get("pi_post_interval_s")) * 1000,
     idle_rate_hz: Number(form.get("idle_rate_hz")),
     boost_rate_hz: Number(form.get("boost_rate_hz")),
-    movement_threshold: Number(form.get("movement_threshold")),
-    settle_threshold: Number(form.get("settle_threshold")),
+    movement_threshold: truncateToDecimals(form.get("movement_threshold"), 2),
+    settle_threshold: truncateToDecimals(form.get("settle_threshold"), 2),
     motion_sensitivity: Number(form.get("motion_sensitivity")),
     boost_duration_ms: Number(form.get("boost_duration_s")) * 1000,
     cooldown_ms: Number(form.get("cooldown_s")) * 1000,
@@ -630,6 +721,7 @@ if ("serviceWorker" in navigator) {
 }
 
 registerServiceWorker();
+attachNodeSettingsHelp();
 refreshStatus();
 refreshAdmin().catch((error) => setMessage(error.message));
 document.addEventListener("visibilitychange", () => {

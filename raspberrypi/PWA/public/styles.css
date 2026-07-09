@@ -206,6 +206,9 @@ dl div:last-child {
 }
 
 dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: #53606f;
 }
 
@@ -352,8 +355,13 @@ dd {
 
 .node-config-form label {
   display: grid;
+  grid-template-columns: 1fr auto;
   gap: 6px;
   color: #53606f;
+}
+
+.node-config-form label input {
+  grid-column: 1 / -1;
 }
 
 .node-config-form button {
