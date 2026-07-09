@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
+import { isIP } from "node:net";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import webpush from "web-push";
@@ -98,8 +99,8 @@ function findNodeByDeviceId(deviceId: number): NodeRecord | undefined {
 }
 
 function nodeBaseUrl(node: NodeRecord) {
-  if (!node.ip || /[^0-9.]/.test(node.ip)) {
-    throw new Error("node IP is unavailable or invalid");
+  if (!node.ip || isIP(node.ip) !== 4 || node.ip === "0.0.0.0" || node.ip.startsWith("127.")) {
+    throw new Error(`node IP is unavailable or invalid: ${node.ip || "empty"}`);
   }
   return `http://${node.ip}`;
 }
@@ -113,7 +114,8 @@ async function fetchNodeJson(deviceId: number, apiPath: string, init: RequestIni
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const response = await fetch(`${nodeBaseUrl(node)}${apiPath}`, {
+    const targetUrl = `${nodeBaseUrl(node)}${apiPath}`;
+    const response = await fetch(targetUrl, {
       ...init,
       signal: controller.signal,
       headers: {
@@ -126,11 +128,13 @@ async function fetchNodeJson(deviceId: number, apiPath: string, init: RequestIni
     const body = contentType.includes("application/json") ? await response.json() : { text: await response.text() };
     return { status: response.status, body };
   } catch (error: any) {
+    const message = String(error?.message || "");
     return {
       status: 502,
       body: {
         ok: false,
-        error: error?.name === "AbortError" ? "node request timed out" : "node request failed"
+        error: error?.name === "AbortError" ? "node request timed out" : "node request failed",
+        detail: message
       }
     };
   } finally {

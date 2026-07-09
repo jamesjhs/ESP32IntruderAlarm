@@ -127,7 +127,7 @@ async function readJson(url, options = {}) {
   }
   const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload.error || `Request failed with ${response.status}`);
+    throw new Error(payload.detail ? `${payload.error}: ${payload.detail}` : payload.error || `Request failed with ${response.status}`);
   }
   return payload;
 }
@@ -146,6 +146,19 @@ function setMessage(message) {
 
 function setNodeSettingsMessage(message) {
   nodeSettingsMessageEl.textContent = message;
+}
+
+async function runNodeAction(action, successMessage) {
+  try {
+    const result = await action();
+    if (successMessage) {
+      setNodeSettingsMessage(typeof successMessage === "function" ? successMessage(result) : successMessage);
+    }
+    return result;
+  } catch (error) {
+    setNodeSettingsMessage(apiUnavailableMessage(error));
+    return null;
+  }
 }
 
 function nodeRecordFor(deviceId) {
@@ -400,14 +413,20 @@ async function openNodeSettings(deviceId) {
   nodeSettingsTitleEl.textContent = liveNode ? `${liveNode.name} Settings` : `Node ${selectedNodeDeviceId} Settings`;
   setNodeSettingsMessage("Loading node settings...");
   nodeSettingsModalEl.classList.remove("hidden");
-  const [config] = await Promise.all([
-    readJson(`/api/nodes/${selectedNodeDeviceId}/config`).then((payload) => {
-      populateNodeConfigForm(payload);
-      return payload;
-    }),
-    refreshSelectedNodeStatus()
-  ]);
-  setNodeSettingsMessage(config ? "Settings loaded." : "");
+
+  const config = await runNodeAction(async () => {
+    const payload = await readJson(`/api/nodes/${selectedNodeDeviceId}/config`);
+    populateNodeConfigForm(payload);
+    return payload;
+  });
+
+  await runNodeAction(async () => {
+    await refreshSelectedNodeStatus();
+  });
+
+  if (config) {
+    setNodeSettingsMessage("Settings loaded.");
+  }
 }
 
 function closeNodeSettings() {
@@ -513,20 +532,20 @@ nodesEl.addEventListener("click", async (event) => {
 document.querySelector("#close-node-settings").addEventListener("click", closeNodeSettings);
 
 document.querySelector("#refresh-node-status").addEventListener("click", async () => {
-  await runAction(async () => {
+  await runNodeAction(async () => {
     await refreshSelectedNodeStatus();
   }, "Node status refreshed.");
 });
 
 document.querySelector("#calibrate-node").addEventListener("click", async () => {
-  await runAction(async () => {
+  await runNodeAction(async () => {
     await postJson(`/api/nodes/${selectedNodeDeviceId}/calibrate`);
     await refreshSelectedNodeStatus();
   }, "Calibration started.");
 });
 
 document.querySelector("#delete-node-calibration").addEventListener("click", async () => {
-  await runAction(async () => {
+  await runNodeAction(async () => {
     await readJson(`/api/nodes/${selectedNodeDeviceId}/calibration`, { method: "DELETE" });
     await refreshSelectedNodeStatus();
   }, "Calibration deleted.");
@@ -534,7 +553,7 @@ document.querySelector("#delete-node-calibration").addEventListener("click", asy
 
 nodeConfigFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await runAction(async () => {
+  await runNodeAction(async () => {
     const saved = await postJson(`/api/nodes/${selectedNodeDeviceId}/config`, nodeConfigPayload());
     populateNodeConfigForm(saved);
     await refreshSelectedNodeStatus();

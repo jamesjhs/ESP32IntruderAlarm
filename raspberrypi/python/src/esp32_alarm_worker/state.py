@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from typing import Any, Optional
 
 
@@ -30,13 +31,21 @@ class NodeStore:
     def __init__(self) -> None:
         self._nodes: dict[int, NodeSnapshot] = {}
 
+    def _usable_ip(self, value: object) -> bool:
+        try:
+            parsed = ip_address(str(value))
+        except ValueError:
+            return False
+        return not (parsed.is_unspecified or parsed.is_loopback or parsed.is_multicast)
+
     def upsert(self, payload: dict[str, Any], remote_ip: str) -> NodeSnapshot:
         device_id = int(payload.get("device_id", -1))
         if device_id < 0 or device_id > 255:
             raise ValueError("device_id must be an integer from 0 to 255")
 
         name = str(payload.get("name") or f"Movement{device_id:02X}")
-        ip = str(payload.get("ip") or remote_ip)
+        payload_ip = payload.get("ip")
+        ip = str(payload_ip) if self._usable_ip(payload_ip) else remote_ip
         snapshot = NodeSnapshot(
             device_id=device_id,
             name=name,
