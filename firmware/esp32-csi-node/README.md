@@ -170,7 +170,9 @@ The firmware clamps values before storing them:
 - `motion_sensitivity`: 0.3-3.0
 - `boost_duration_ms`: 0-20000 ms
 - `cooldown_ms`: 0-20000 ms
-- `feature_window_ms`: 50-1000 ms
+- `feature_window_ms`: 0-1000 ms. This is the analysis window used to group
+  accepted CSI samples before one movement score is calculated; `0` is treated
+  as a near-immediate 1 ms window internally, not as "score every event".
 
 When `device_id` is changed without explicitly sending `name`, the node
 regenerates its friendly name as `Movement%02X`, for example decimal device ID
@@ -277,8 +279,9 @@ and API values in plain English.
 - `packet_count`: Total CSI samples included in completed detection windows
   since boot.
 - `last_window_packets`: Number of accepted CSI samples in the most recent
-  feature window. If this is below 3, the window is considered too sparse to
-  support a movement decision.
+  feature window. If this is below 3, the current scoring guard treats the
+  window as too sparse to support a movement decision, so `movement_score` can
+  read as zero even though occasional CSI packets are arriving.
 - `rejected_samples`: CSI packets discarded before analysis because they were
   malformed, too short, or had poor signal quality.
 - `filtered_samples`: Packets accepted but clipped or filtered because they
@@ -337,8 +340,13 @@ and API values in plain English.
   return to idle, provided enough quiet windows have arrived. It is configurable
   from 0 to 20000 ms.
 - `feature_window_ms`: How much time is grouped into one detection decision.
-  Shorter windows react faster but are noisier; longer windows are smoother but
-  slower. It is configurable from 50 to 1000 ms.
+  Think of it as the CSI analysis window or detector shutter speed. Shorter
+  windows can react faster but contain fewer packets and are noisier; longer
+  windows collect more evidence and reject more false positives, but respond
+  more slowly. This is related to sensitivity, but it is not an inverse
+  sensitivity knob and it is not an event trigger. With the current sparse-window
+  guard, very short windows, especially `0`, can produce mostly zero scores
+  because each window often contains fewer than 3 accepted CSI packets.
 
 ### Chart and Page Controls
 

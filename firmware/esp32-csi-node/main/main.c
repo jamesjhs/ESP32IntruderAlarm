@@ -1897,7 +1897,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<dt>Maximum Sample Rate</dt><dd>The CSI ingest cap used during boost after movement is confirmed.</dd>"
         "<dt>Boost Hold Time</dt><dd>How long the detector remains in boost after movement is confirmed before entering cooldown.</dd>"
         "<dt>Cooldown Time</dt><dd>How long the detector waits after boost before it is allowed to return to idle, provided enough quiet windows have arrived.</dd>"
-        "<dt>Feature Window</dt><dd>The time span, in milliseconds, used to group CSI samples into one detection decision. Shorter reacts faster; longer is smoother.</dd>"
+        "<dt>Feature Window</dt><dd>The CSI analysis window: how much time is grouped before one movement score is calculated. Shorter can react faster but may contain too few packets; longer is smoother and rejects more false positives but responds more slowly. 0 means a near-immediate 1 ms window internally, not event-triggered scoring, so it can produce mostly zero scores when fewer than 3 packets arrive in a window.</dd>"
         "<dt>Graph Score Max</dt><dd>The top of the movement-score axis on the chart. It changes display scale only and is not saved.</dd>"
         "<dt>Graph Rate Max</dt><dd>The top of the sample-rate axis on the chart. It changes display scale only and is not saved.</dd>"
         "<dt>Graph Update Rate</dt><dd>How often this browser page polls and redraws. It affects the page only; high values add extra HTTP traffic.</dd>"
