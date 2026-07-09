@@ -9,7 +9,8 @@ description = "Raspberry Pi ESP32 telemetry worker for ESP32IntruderAlarm"
 requires-python = ">=3.9"
 dependencies = [
   "aiohttp>=3.13.5,<3.14",
-  "python-dotenv>=1.2.2,<2"
+  "python-dotenv>=1.2.2,<2; python_version >= '3.10'",
+  "python-dotenv>=1.2.1,<1.2.2; python_version < '3.10'"
 ]
 
 [project.scripts]

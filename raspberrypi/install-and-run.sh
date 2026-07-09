@@ -71,7 +71,9 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 log "Installing Python worker into ${PYTHON_VENV}"
+run_as_user python3 -V
 run_as_user python3 -m venv "${PYTHON_VENV}"
+run_as_user "${PYTHON_VENV}/bin/python" -V
 run_as_user "${PYTHON_VENV}/bin/python" -m pip install --upgrade pip setuptools
 run_as_user "${PYTHON_VENV}/bin/python" -m pip install -e "${PYTHON_DIR}"
 run_as_user "${PYTHON_VENV}/bin/python" -m pip check

@@ -13,7 +13,7 @@ Supported runtime:
 
 - Python `>=3.9`
 - Current dependency minimums: `aiohttp>=3.13.5,<3.14` and
-  `python-dotenv>=1.2.2,<2`
+  `python-dotenv>=1.2.1,<2`
 - Build backend: `setuptools>=68,<83`
 
 ```powershell
@@ -56,6 +56,9 @@ sudo apt install python3-venv
 ```
 
 Then recreate the virtual environment and run `pip check` again.
+
+On Python `3.9`, the worker pins `python-dotenv` below `1.2.2` because
+`python-dotenv` `1.2.2` requires Python `3.10` or newer.
 
 If ESP32 posts fail, confirm:
 
