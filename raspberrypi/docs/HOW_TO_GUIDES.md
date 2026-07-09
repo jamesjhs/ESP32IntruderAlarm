@@ -24,6 +24,8 @@ python -m esp32_alarm_worker.server
 
 The worker supports Python `3.9` or newer. If the install fails while fetching
 build dependencies, check the active interpreter with `python3 --version`.
+On Python `3.9`, the worker uses the latest compatible `aiohttp` 3.13.x line
+because `aiohttp` 3.14 requires Python `3.10` or newer.
 
 Check:
 

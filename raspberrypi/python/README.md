@@ -12,7 +12,7 @@ traffic on a timer.
 Supported runtime:
 
 - Python `>=3.9`
-- Current dependency minimums: `aiohttp>=3.14.1,<4` and
+- Current dependency minimums: `aiohttp>=3.13.5,<3.14` and
   `python-dotenv>=1.2.2,<2`
 - Build backend: `setuptools>=68,<83`
 
