@@ -336,7 +336,6 @@ export class AlarmDatabase {
          ON CONFLICT(device_id) DO UPDATE SET
           name = excluded.name,
           ip = excluded.ip,
-          active = excluded.active,
           last_seen_at = CURRENT_TIMESTAMP,
           payload_json = excluded.payload_json,
           updated_at = CURRENT_TIMESTAMP`
@@ -349,6 +348,11 @@ export class AlarmDatabase {
       .prepare("UPDATE nodes SET name = ?, expected = ?, active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(input.name, boolToDb(input.expected), boolToDb(input.active), id);
     this.audit("node.update", `node:${id}`, input);
+  }
+
+  setNodeActive(id: number, active: boolean) {
+    this.db.prepare("UPDATE nodes SET active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(boolToDb(active), id);
+    this.audit("node.active", `node:${id}`, { active });
   }
 
   createEvent(input: { type: string; severity: string; title: string; body?: string; metadata?: unknown }) {

@@ -5,7 +5,7 @@ import fastifyStatic from "@fastify/static";
 import webpush from "web-push";
 
 import { loadConfig } from "./config";
-import { AlarmDatabase, SecuritySettings, UserRole } from "./db";
+import { AlarmDatabase, NodeRecord, SecuritySettings, UserRole } from "./db";
 
 const appConfig = loadConfig();
 const publicDir = path.resolve(__dirname, "..", "public");
@@ -90,6 +90,51 @@ function syncWorkerNodes(status: any) {
       active: node.state === "online",
       payload: node.payload ?? {}
     });
+  }
+}
+
+function findNodeByDeviceId(deviceId: number): NodeRecord | undefined {
+  return db.listNodes().find((node) => node.deviceId === deviceId);
+}
+
+function nodeBaseUrl(node: NodeRecord) {
+  if (!node.ip || /[^0-9.]/.test(node.ip)) {
+    throw new Error("node IP is unavailable or invalid");
+  }
+  return `http://${node.ip}`;
+}
+
+async function fetchNodeJson(deviceId: number, apiPath: string, init: RequestInit = {}) {
+  const node = findNodeByDeviceId(deviceId);
+  if (!node) {
+    return { status: 404, body: { ok: false, error: "node not found" } };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${nodeBaseUrl(node)}${apiPath}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...(init.headers ?? {})
+      }
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    const body = contentType.includes("application/json") ? await response.json() : { text: await response.text() };
+    return { status: response.status, body };
+  } catch (error: any) {
+    return {
+      status: 502,
+      body: {
+        ok: false,
+        error: error?.name === "AbortError" ? "node request timed out" : "node request failed"
+      }
+    };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -214,6 +259,42 @@ export function buildServer() {
     auditLog: db.auditLog(25)
   }));
 
+  server.get<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/status", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/status.json");
+    reply.code(result.status);
+    return result.body;
+  });
+
+  server.get<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/config", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/api/config");
+    reply.code(result.status);
+    return result.body;
+  });
+
+  server.post<{ Params: { deviceId: string }; Body: Record<string, unknown> }>(
+    "/api/nodes/:deviceId/config",
+    async (request, reply) => {
+      const result = await fetchNodeJson(Number(request.params.deviceId), "/api/config", {
+        method: "POST",
+        body: JSON.stringify(request.body ?? {})
+      });
+      reply.code(result.status);
+      return result.body;
+    }
+  );
+
+  server.post<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/calibrate", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/api/calibrate", { method: "POST" });
+    reply.code(result.status);
+    return result.body;
+  });
+
+  server.delete<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/calibration", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/api/calibration", { method: "DELETE" });
+    reply.code(result.status);
+    return result.body;
+  });
+
   server.post<{ Body: { username?: string; displayName?: string; role?: string; state?: string } }>(
     "/api/admin/users",
     async (request, reply) => {
@@ -295,6 +376,15 @@ export function buildServer() {
       return { ok: true };
     }
   );
+
+  server.post<{ Params: { id: string }; Body: { active?: boolean } }>("/api/admin/nodes/:id/active", async (request, reply) => {
+    if (typeof request.body?.active !== "boolean") {
+      reply.code(400);
+      return { ok: false, error: "active is required" };
+    }
+    db.setNodeActive(Number(request.params.id), request.body.active);
+    return { ok: true };
+  });
 
   server.post<{ Body: SecuritySettings }>("/api/admin/security", async (request) => {
     db.saveSecuritySettings(request.body);

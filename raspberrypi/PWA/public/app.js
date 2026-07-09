@@ -14,11 +14,15 @@ const vapidConfiguredEl = document.querySelector("#vapid-configured");
 const vapidFormEl = document.querySelector("#vapid-form");
 const pushCountEl = document.querySelector("#push-count");
 const pushSubscriptionsEl = document.querySelector("#push-subscriptions");
-const adminNodesListEl = document.querySelector("#admin-nodes-list");
 const securityFormEl = document.querySelector("#security-form");
 const adminMessageEl = document.querySelector("#admin-message");
 const eventsListEl = document.querySelector("#events-list");
 const auditListEl = document.querySelector("#audit-list");
+const nodeSettingsModalEl = document.querySelector("#node-settings-modal");
+const nodeSettingsTitleEl = document.querySelector("#node-settings-title");
+const nodeStatusDetailsEl = document.querySelector("#node-status-details");
+const nodeConfigFormEl = document.querySelector("#node-config-form");
+const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
 
 const VERSION_KEY = "esp32-alarm:last-seen-version";
 const SECURITY_LABELS = {
@@ -50,6 +54,8 @@ const SECURITY_LABELS = {
 
 let currentAdmin = null;
 let pendingHostVersion = null;
+let lastStatusNodes = [];
+let selectedNodeDeviceId = null;
 
 function apiUnavailableMessage(error) {
   if (String(error?.message || "").includes("Not Found")) {
@@ -138,7 +144,16 @@ function setMessage(message) {
   adminMessageEl.textContent = message;
 }
 
+function setNodeSettingsMessage(message) {
+  nodeSettingsMessageEl.textContent = message;
+}
+
+function nodeRecordFor(deviceId) {
+  return currentAdmin?.nodes?.find((node) => Number(node.deviceId) === Number(deviceId)) || null;
+}
+
 function renderNodes(nodes) {
+  lastStatusNodes = nodes;
   if (!nodes.length) {
     nodesEl.className = "nodes empty";
     nodesEl.textContent = "No node telemetry yet.";
@@ -150,11 +165,30 @@ function renderNodes(nodes) {
     ...nodes.map((node) => {
       const item = document.createElement("div");
       const payload = node.payload || {};
+      const registryNode = nodeRecordFor(node.device_id);
       item.className = nodeHasMovement(payload) ? "node movement" : "node";
       appendText(item, "strong", String(node.name ?? "Unnamed node"));
       appendText(item, "span", `ID ${node.device_id} · ${node.state}`);
       appendText(item, "span", String(node.ip ?? ""));
       appendText(item, "span", `Score ${formatScore(payload.movement_score)}`);
+
+      const activeLabel = document.createElement("label");
+      activeLabel.className = "node-active";
+      const active = document.createElement("input");
+      active.type = "checkbox";
+      active.checked = registryNode ? registryNode.active : node.state === "online";
+      active.disabled = !registryNode;
+      active.dataset.nodeRecordId = registryNode ? String(registryNode.id) : "";
+      activeLabel.appendChild(active);
+      activeLabel.append(" Active");
+      item.appendChild(activeLabel);
+
+      const settings = document.createElement("button");
+      settings.type = "button";
+      settings.className = "node-settings-button";
+      settings.dataset.deviceId = String(node.device_id);
+      settings.textContent = "Settings";
+      item.appendChild(settings);
       return item;
     })
   );
@@ -244,52 +278,6 @@ function renderPush(admin) {
   );
 }
 
-function renderAdminNodes(nodes) {
-  if (!nodes.length) {
-    adminNodesListEl.textContent = "No persistent node records yet.";
-    return;
-  }
-  adminNodesListEl.replaceChildren(
-    ...nodes.map((node) => {
-      const row = document.createElement("form");
-      row.className = "record-grid node-row";
-      row.dataset.id = String(node.id);
-      appendText(row, "strong", `ID ${node.deviceId}`);
-
-      const name = document.createElement("input");
-      name.name = "name";
-      name.value = node.name;
-      row.appendChild(name);
-
-      const expectedLabel = document.createElement("label");
-      const expected = document.createElement("input");
-      expected.name = "expected";
-      expected.type = "checkbox";
-      expected.checked = node.expected;
-      expectedLabel.appendChild(expected);
-      expectedLabel.append(" expected");
-      row.appendChild(expectedLabel);
-
-      const activeLabel = document.createElement("label");
-      const active = document.createElement("input");
-      active.name = "active";
-      active.type = "checkbox";
-      active.checked = node.active;
-      activeLabel.appendChild(active);
-      activeLabel.append(" active");
-      row.appendChild(activeLabel);
-
-      const save = document.createElement("button");
-      save.type = "submit";
-      save.textContent = "Save";
-      row.appendChild(save);
-
-      appendText(row, "small", `${node.ip || "no IP"} · ${node.lastSeenAt || "never seen"}`);
-      return row;
-    })
-  );
-}
-
 function renderSecurity(settings) {
   securityFormEl.replaceChildren(
     ...Object.entries(SECURITY_LABELS).map(([key, option]) => {
@@ -330,10 +318,112 @@ function renderRecords(target, records, emptyText) {
   );
 }
 
+function renderNodeStatus(status) {
+  const keys = [
+    "sensing_state",
+    "sample_rate_hz",
+    "accepted_csi_rate_hz",
+    "movement_score",
+    "movement_detected",
+    "baseline_noise",
+    "confirm_windows",
+    "quiet_windows",
+    "rssi",
+    "noise_floor",
+    "packet_count",
+    "last_packet_ms",
+    "calibrating"
+  ];
+  nodeStatusDetailsEl.replaceChildren(
+    ...keys.map((key) => {
+      const row = document.createElement("div");
+      appendText(row, "dt", key);
+      const value = status?.[key];
+      const display = ["movement_score", "baseline_noise"].includes(key) ? formatScore(value) : String(value ?? "n/a");
+      appendText(row, "dd", display);
+      return row;
+    })
+  );
+}
+
+function setFormNumber(form, name, value) {
+  form.elements[name].value = value === undefined || value === null ? "" : String(value);
+}
+
+function populateNodeConfigForm(config) {
+  nodeConfigFormEl.elements.device_id.value = config.device_id ?? "";
+  nodeConfigFormEl.elements.name.value = config.name ?? "";
+  nodeConfigFormEl.elements.pi_ip.value = config.pi_ip ?? "";
+  setFormNumber(nodeConfigFormEl, "pi_port", config.pi_port ?? 3005);
+  nodeConfigFormEl.elements.pi_api_path.value = config.pi_api_path ?? "/espdata";
+  setFormNumber(nodeConfigFormEl, "pi_post_interval_s", Math.round((Number(config.pi_post_interval_ms) || 5000) / 1000));
+  setFormNumber(nodeConfigFormEl, "idle_rate_hz", config.idle_rate_hz);
+  setFormNumber(nodeConfigFormEl, "boost_rate_hz", config.boost_rate_hz);
+  setFormNumber(nodeConfigFormEl, "movement_threshold", config.movement_threshold);
+  setFormNumber(nodeConfigFormEl, "settle_threshold", config.settle_threshold);
+  setFormNumber(nodeConfigFormEl, "motion_sensitivity", config.motion_sensitivity);
+  setFormNumber(nodeConfigFormEl, "boost_duration_s", Math.round((Number(config.boost_duration_ms) || 0) / 1000));
+  setFormNumber(nodeConfigFormEl, "cooldown_s", Math.round((Number(config.cooldown_ms) || 0) / 1000));
+  setFormNumber(nodeConfigFormEl, "feature_window_ms", config.feature_window_ms);
+}
+
+function nodeConfigPayload() {
+  const form = new FormData(nodeConfigFormEl);
+  const apiPath = String(form.get("pi_api_path") || "/espdata").trim();
+  return {
+    device_id: Number(form.get("device_id")),
+    name: String(form.get("name") || "").trim(),
+    pi_ip: String(form.get("pi_ip") || "").trim(),
+    pi_port: Number(form.get("pi_port")),
+    pi_api_path: apiPath.startsWith("/") ? apiPath : `/${apiPath}`,
+    pi_post_interval_ms: Number(form.get("pi_post_interval_s")) * 1000,
+    idle_rate_hz: Number(form.get("idle_rate_hz")),
+    boost_rate_hz: Number(form.get("boost_rate_hz")),
+    movement_threshold: Number(form.get("movement_threshold")),
+    settle_threshold: Number(form.get("settle_threshold")),
+    motion_sensitivity: Number(form.get("motion_sensitivity")),
+    boost_duration_ms: Number(form.get("boost_duration_s")) * 1000,
+    cooldown_ms: Number(form.get("cooldown_s")) * 1000,
+    feature_window_ms: Number(form.get("feature_window_ms"))
+  };
+}
+
+async function refreshSelectedNodeStatus() {
+  if (selectedNodeDeviceId === null) return;
+  const status = await readJson(`/api/nodes/${selectedNodeDeviceId}/status`);
+  renderNodeStatus(status);
+}
+
+async function openNodeSettings(deviceId) {
+  selectedNodeDeviceId = Number(deviceId);
+  const liveNode = lastStatusNodes.find((node) => Number(node.device_id) === selectedNodeDeviceId);
+  nodeSettingsTitleEl.textContent = liveNode ? `${liveNode.name} Settings` : `Node ${selectedNodeDeviceId} Settings`;
+  setNodeSettingsMessage("Loading node settings...");
+  nodeSettingsModalEl.classList.remove("hidden");
+  const [config] = await Promise.all([
+    readJson(`/api/nodes/${selectedNodeDeviceId}/config`).then((payload) => {
+      populateNodeConfigForm(payload);
+      return payload;
+    }),
+    refreshSelectedNodeStatus()
+  ]);
+  setNodeSettingsMessage(config ? "Settings loaded." : "");
+}
+
+function closeNodeSettings() {
+  nodeSettingsModalEl.classList.add("hidden");
+  selectedNodeDeviceId = null;
+  nodeStatusDetailsEl.replaceChildren();
+  nodeConfigFormEl.reset();
+  setNodeSettingsMessage("");
+}
+
 async function refreshAdmin() {
   currentAdmin = await readJson("/api/admin/summary");
   renderPush(currentAdmin);
-  renderAdminNodes(currentAdmin.nodes);
+  if (lastStatusNodes.length) {
+    renderNodes(lastStatusNodes);
+  }
   renderSecurity(currentAdmin.security);
   renderRecords(eventsListEl, currentAdmin.events, "No events yet.");
   renderRecords(auditListEl, currentAdmin.auditLog, "No audit records yet.");
@@ -405,18 +495,51 @@ async function unsubscribePush() {
 document.querySelector("#refresh-app").addEventListener("click", refreshAppPayload);
 document.querySelector("#mandatory-refresh").addEventListener("click", refreshAppPayload);
 
-adminNodesListEl.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const formEl = event.target;
-  const form = new FormData(formEl);
+nodesEl.addEventListener("change", async (event) => {
+  const checkbox = event.target;
+  if (checkbox.type !== "checkbox" || !checkbox.dataset.nodeRecordId) return;
   await runAction(async () => {
-    await putJson(`/api/admin/nodes/${formEl.dataset.id}`, {
-      name: form.get("name"),
-      expected: form.get("expected") === "on",
-      active: form.get("active") === "on"
-    });
+    await postJson(`/api/admin/nodes/${checkbox.dataset.nodeRecordId}/active`, { active: checkbox.checked });
     await refreshAdmin();
-  }, "Node saved.");
+  }, "Node active state saved.");
+});
+
+nodesEl.addEventListener("click", async (event) => {
+  const deviceId = event.target.dataset?.deviceId;
+  if (!deviceId) return;
+  await runAction(() => openNodeSettings(deviceId));
+});
+
+document.querySelector("#close-node-settings").addEventListener("click", closeNodeSettings);
+
+document.querySelector("#refresh-node-status").addEventListener("click", async () => {
+  await runAction(async () => {
+    await refreshSelectedNodeStatus();
+  }, "Node status refreshed.");
+});
+
+document.querySelector("#calibrate-node").addEventListener("click", async () => {
+  await runAction(async () => {
+    await postJson(`/api/nodes/${selectedNodeDeviceId}/calibrate`);
+    await refreshSelectedNodeStatus();
+  }, "Calibration started.");
+});
+
+document.querySelector("#delete-node-calibration").addEventListener("click", async () => {
+  await runAction(async () => {
+    await readJson(`/api/nodes/${selectedNodeDeviceId}/calibration`, { method: "DELETE" });
+    await refreshSelectedNodeStatus();
+  }, "Calibration deleted.");
+});
+
+nodeConfigFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await runAction(async () => {
+    const saved = await postJson(`/api/nodes/${selectedNodeDeviceId}/config`, nodeConfigPayload());
+    populateNodeConfigForm(saved);
+    await refreshSelectedNodeStatus();
+    await refreshStatus();
+  }, "Configuration saved to ESP32.");
 });
 
 document.querySelector("#generate-vapid").addEventListener("click", async () => {

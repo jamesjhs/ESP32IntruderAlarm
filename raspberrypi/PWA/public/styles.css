@@ -110,7 +110,8 @@ textarea {
 }
 
 h1,
-h2 {
+h2,
+h3 {
   margin: 0;
 }
 
@@ -121,6 +122,11 @@ h1 {
 h2 {
   font-size: 1.05rem;
   margin-bottom: 16px;
+}
+
+h3 {
+  font-size: 0.95rem;
+  margin-bottom: 14px;
 }
 
 .badge {
@@ -150,6 +156,37 @@ h2 {
   border: 1px solid #d9e0ea;
   border-radius: 8px;
   padding: 18px;
+}
+
+.collapsible summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+}
+
+.collapsible summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible summary::after {
+  content: "+";
+  color: #53606f;
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.collapsible[open] summary {
+  margin-bottom: 16px;
+}
+
+.collapsible[open] summary::after {
+  content: "-";
+}
+
+.collapsible summary h2 {
+  margin-bottom: 0;
 }
 
 dl {
@@ -203,13 +240,29 @@ dd {
 }
 
 .node {
-  grid-template-columns: 1fr repeat(3, auto);
+  grid-template-columns: minmax(140px, 1fr) repeat(3, auto) auto auto;
 }
 
 .node.movement {
   border-color: #d77b1f;
   background: #fff2dd;
   box-shadow: inset 4px 0 0 #d77b1f;
+}
+
+.node-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #53606f;
+  white-space: nowrap;
+}
+
+.node-active input {
+  width: auto;
+}
+
+.node-settings-button {
+  white-space: nowrap;
 }
 
 .record-grid {
@@ -257,6 +310,54 @@ dd {
   display: grid;
   gap: 6px;
   color: #53606f;
+}
+
+.node-settings-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  overflow: auto;
+  padding: 24px;
+  background: rgba(24, 33, 47, 0.72);
+}
+
+.node-settings {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 18px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.22);
+}
+
+.node-settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.node-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) 1fr;
+  gap: 16px;
+}
+
+.node-config-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.node-config-form label {
+  display: grid;
+  gap: 6px;
+  color: #53606f;
+}
+
+.node-config-form button {
+  grid-column: 1 / -1;
 }
 
 .toggles {
@@ -335,11 +436,14 @@ dd {
   .node,
   .record-grid,
   .node-row,
+  .node-settings-grid,
+  .node-config-form,
   .toggles {
     grid-template-columns: 1fr;
   }
 
-  .topbar {
+  .topbar,
+  .node-settings-header {
     align-items: flex-start;
     flex-direction: column;
   }
