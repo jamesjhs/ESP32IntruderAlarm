@@ -196,22 +196,45 @@ function renderUsers(users) {
       const row = document.createElement("form");
       row.className = "record-grid user-row";
       row.dataset.id = String(user.id);
-      row.innerHTML = `
-        <strong>${user.username}</strong>
-        <input name="displayName" value="${user.displayName}">
-        <select name="role">
-          ${["viewer", "resident", "admin", "owner"]
-            .map((role) => `<option value="${role}" ${role === user.role ? "selected" : ""}>${role}</option>`)
-            .join("")}
-        </select>
-        <select name="state">
-          ${["active", "disabled", "setup-required"]
-            .map((state) => `<option value="${state}" ${state === user.state ? "selected" : ""}>${state}</option>`)
-            .join("")}
-        </select>
-        <button type="submit">Save</button>
-        <button type="button" data-delete-user="${user.id}">Delete</button>
-      `;
+      appendText(row, "strong", user.username);
+
+      const displayName = document.createElement("input");
+      displayName.name = "displayName";
+      displayName.value = user.displayName;
+      row.appendChild(displayName);
+
+      const role = document.createElement("select");
+      role.name = "role";
+      for (const value of ["viewer", "resident", "admin", "owner"]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        role.appendChild(option);
+      }
+      setSelectValue(role, user.role);
+      row.appendChild(role);
+
+      const state = document.createElement("select");
+      state.name = "state";
+      for (const value of ["active", "disabled", "setup-required"]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        state.appendChild(option);
+      }
+      setSelectValue(state, user.state);
+      row.appendChild(state);
+
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.textContent = "Save";
+      row.appendChild(save);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.dataset.deleteUser = String(user.id);
+      deleteButton.textContent = "Delete";
+      row.appendChild(deleteButton);
       return row;
     })
   );
@@ -251,14 +274,37 @@ function renderAdminNodes(nodes) {
       const row = document.createElement("form");
       row.className = "record-grid node-row";
       row.dataset.id = String(node.id);
-      row.innerHTML = `
-        <strong>ID ${node.deviceId}</strong>
-        <input name="name" value="${node.name}">
-        <label><input name="expected" type="checkbox" ${node.expected ? "checked" : ""}> expected</label>
-        <label><input name="active" type="checkbox" ${node.active ? "checked" : ""}> active</label>
-        <button type="submit">Save</button>
-        <small>${node.ip || "no IP"} · ${node.lastSeenAt || "never seen"}</small>
-      `;
+      appendText(row, "strong", `ID ${node.deviceId}`);
+
+      const name = document.createElement("input");
+      name.name = "name";
+      name.value = node.name;
+      row.appendChild(name);
+
+      const expectedLabel = document.createElement("label");
+      const expected = document.createElement("input");
+      expected.name = "expected";
+      expected.type = "checkbox";
+      expected.checked = node.expected;
+      expectedLabel.appendChild(expected);
+      expectedLabel.append(" expected");
+      row.appendChild(expectedLabel);
+
+      const activeLabel = document.createElement("label");
+      const active = document.createElement("input");
+      active.name = "active";
+      active.type = "checkbox";
+      active.checked = node.active;
+      activeLabel.appendChild(active);
+      activeLabel.append(" active");
+      row.appendChild(activeLabel);
+
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.textContent = "Save";
+      row.appendChild(save);
+
+      appendText(row, "small", `${node.ip || "no IP"} · ${node.lastSeenAt || "never seen"}`);
       return row;
     })
   );

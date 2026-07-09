@@ -29,7 +29,8 @@ button {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid #cad3df;
@@ -37,6 +38,13 @@ select {
   padding: 8px;
   background: #ffffff;
   color: #18212f;
+}
+
+textarea {
+  resize: vertical;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
 }
 
 .hidden {
@@ -198,6 +206,12 @@ dd {
   grid-template-columns: 1fr repeat(3, auto);
 }
 
+.node.movement {
+  border-color: #d77b1f;
+  background: #fff2dd;
+  box-shadow: inset 4px 0 0 #d77b1f;
+}
+
 .record-grid {
   grid-template-columns: minmax(110px, 1fr) repeat(4, minmax(0, 140px));
 }
@@ -231,6 +245,18 @@ dd {
 
 .inline-form select {
   flex: 0 1 130px;
+}
+
+.key-form {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.key-form label {
+  display: grid;
+  gap: 6px;
+  color: #53606f;
 }
 
 .toggles {
