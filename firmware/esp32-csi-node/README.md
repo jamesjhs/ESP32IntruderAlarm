@@ -126,6 +126,8 @@ baseline energy, variance, shape, and noise estimates. The dashboard and
 
 - `GET /` serves the dashboard.
 - `GET /status.json` and `GET /api/status` return live node state.
+- `GET /log/` returns a plain-text snapshot of the last 100 in-memory log
+  lines since boot. `GET /log` is also accepted.
 - `GET /api/config` returns tunable sensing configuration.
 - `POST /api/config` accepts partial JSON config updates from the Pi dashboard
   or the local diagnostic page. Changes are saved to NVS.

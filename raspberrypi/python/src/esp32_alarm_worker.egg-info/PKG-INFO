@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: esp32-alarm-worker
+Version: 0.0.1
+Summary: Raspberry Pi ESP32 telemetry worker for ESP32IntruderAlarm
+Requires-Python: >=3.9
+Requires-Dist: aiohttp<3.14,>=3.13.5
+Requires-Dist: python-dotenv<2,>=1.2.2; python_version >= "3.10"
+Requires-Dist: python-dotenv<1.2.2,>=1.2.1; python_version < "3.10"
