@@ -99,6 +99,36 @@
         </article>
       </section>
 
+      <section id="movement-history" class="panel movement-history">
+        <div class="chart-header">
+          <div>
+            <h2>Movement Score History</h2>
+            <p id="history-range-label" class="message">Showing recent movement scores.</p>
+          </div>
+          <div class="history-controls">
+            <label>From <output id="history-from-label">6h</output></label>
+            <label>To <output id="history-to-label">0h</output></label>
+          </div>
+        </div>
+
+        <div class="range-shell">
+          <input id="history-from-hours" type="range" min="0" max="6" step="0.25" value="6">
+          <input id="history-to-hours" type="range" min="0" max="6" step="0.25" value="0">
+        </div>
+
+        <div class="trigger-control">
+          <label>Trigger level <output id="trigger-level-label">3.00</output></label>
+          <input id="trigger-level" type="range" min="0" max="10" step="0.01" value="3">
+          <label class="node-active"><input id="trigger-enabled" type="checkbox" checked> Push alerts</label>
+        </div>
+
+        <article class="chart-card">
+          <h3>Amalgamated Score</h3>
+          <canvas id="aggregate-chart" height="180"></canvas>
+        </article>
+        <div id="node-charts" class="node-charts"></div>
+      </section>
+
       <section class="admin-grid">
         <details class="panel collapsible" id="vapid">
           <summary><h2>VAPID & Push</h2></summary>

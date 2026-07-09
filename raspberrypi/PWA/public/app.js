@@ -23,6 +23,16 @@ const nodeSettingsTitleEl = document.querySelector("#node-settings-title");
 const nodeStatusDetailsEl = document.querySelector("#node-status-details");
 const nodeConfigFormEl = document.querySelector("#node-config-form");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
+const historyFromEl = document.querySelector("#history-from-hours");
+const historyToEl = document.querySelector("#history-to-hours");
+const historyFromLabelEl = document.querySelector("#history-from-label");
+const historyToLabelEl = document.querySelector("#history-to-label");
+const historyRangeLabelEl = document.querySelector("#history-range-label");
+const triggerLevelEl = document.querySelector("#trigger-level");
+const triggerLevelLabelEl = document.querySelector("#trigger-level-label");
+const triggerEnabledEl = document.querySelector("#trigger-enabled");
+const aggregateChartEl = document.querySelector("#aggregate-chart");
+const nodeChartsEl = document.querySelector("#node-charts");
 
 const VERSION_KEY = "esp32-alarm:last-seen-version";
 const SECURITY_LABELS = {
@@ -96,6 +106,9 @@ let currentAdmin = null;
 let pendingHostVersion = null;
 let lastStatusNodes = [];
 let selectedNodeDeviceId = null;
+let movementHistory = { range: { fromHours: 6, toHours: 0, availableHours: 0 }, samples: [] };
+let movementTrigger = { threshold: 3, enabled: true };
+let historyWindow = { fromHours: 6, toHours: 0 };
 
 function apiUnavailableMessage(error) {
   if (String(error?.message || "").includes("Not Found")) {
@@ -137,6 +150,12 @@ function formatScore(value) {
   return number === null ? "n/a" : number.toFixed(3);
 }
 
+function formatHours(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0h";
+  return Number.isInteger(number) ? `${number}h` : `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}h`;
+}
+
 function truncateToDecimals(value, decimals) {
   const number = asNumber(value);
   if (number === null) return null;
@@ -158,6 +177,13 @@ function appendHelp(parent, text) {
   help.textContent = "?";
   parent.appendChild(help);
   return help;
+}
+
+function parseSampleTime(value) {
+  if (!value) return Date.now();
+  const normalized = String(value).includes("T") ? String(value) : String(value).replace(" ", "T");
+  const timestamp = Date.parse(normalized.endsWith("Z") ? normalized : `${normalized}Z`);
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
 }
 
 function nodeHasMovement(payload) {
@@ -528,6 +554,223 @@ function closeNodeSettings() {
   setNodeSettingsMessage("");
 }
 
+function normalizeHistoryWindow() {
+  let fromHours = Number(historyFromEl.value);
+  let toHours = Number(historyToEl.value);
+  const max = Number(historyFromEl.max);
+  if (!Number.isFinite(fromHours)) fromHours = Math.min(6, max);
+  if (!Number.isFinite(toHours)) toHours = 0;
+  fromHours = Math.min(Math.max(fromHours, 0), max);
+  toHours = Math.min(Math.max(toHours, 0), max);
+  if (fromHours < toHours) {
+    [fromHours, toHours] = [toHours, fromHours];
+  }
+  historyWindow = { fromHours, toHours };
+  historyFromEl.value = String(fromHours);
+  historyToEl.value = String(toHours);
+  historyFromLabelEl.textContent = formatHours(fromHours);
+  historyToLabelEl.textContent = formatHours(toHours);
+  historyRangeLabelEl.textContent = `Showing ${formatHours(fromHours)} to ${formatHours(toHours)} before now.`;
+}
+
+function chartDimensions(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.floor(rect.width || canvas.parentElement.clientWidth || 640));
+  const height = Math.max(160, Number(canvas.getAttribute("height")) || 180);
+  canvas.width = Math.floor(width * scale);
+  canvas.height = Math.floor(height * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  return { ctx, width, height };
+}
+
+function pointsForSamples(samples, now, fromHours, toHours) {
+  const fromTime = now - fromHours * 3600000;
+  const toTime = now - toHours * 3600000;
+  return samples
+    .map((sample) => ({ ...sample, time: parseSampleTime(sample.sampledAt) }))
+    .filter((sample) => sample.time >= fromTime && sample.time <= toTime)
+    .sort((a, b) => a.time - b.time);
+}
+
+function aggregateSamples(samples) {
+  const buckets = new Map();
+  for (const sample of samples) {
+    const key = sample.sampledAt;
+    const existing = buckets.get(key) || {
+      sampledAt: sample.sampledAt,
+      score: 0,
+      nodeNames: [],
+      deviceIds: []
+    };
+    existing.score = Math.max(existing.score, Number(sample.score) || 0);
+    if ((Number(sample.score) || 0) >= movementTrigger.threshold) {
+      existing.nodeNames.push(sample.nodeName);
+      existing.deviceIds.push(sample.deviceId);
+    }
+    buckets.set(key, existing);
+  }
+  return [...buckets.values()];
+}
+
+function drawChart(canvas, samples, options = {}) {
+  const { ctx, width, height } = chartDimensions(canvas);
+  const padding = { left: 42, right: 16, top: 14, bottom: 28 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const now = Date.now();
+  const fromHours = historyWindow.fromHours;
+  const toHours = historyWindow.toHours;
+  const fromTime = now - fromHours * 3600000;
+  const toTime = now - toHours * 3600000;
+  const points = pointsForSamples(samples, now, fromHours, toHours);
+  const yMax = Math.max(10, movementTrigger.threshold, ...points.map((point) => Number(point.score) || 0));
+  const x = (time) => padding.left + ((time - fromTime) / Math.max(1, toTime - fromTime)) * innerWidth;
+  const y = (score) => padding.top + innerHeight - (Number(score) / yMax) * innerHeight;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "#edf1f5";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const yy = padding.top + (innerHeight * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, yy);
+    ctx.lineTo(width - padding.right, yy);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "#cad3df";
+  ctx.beginPath();
+  ctx.moveTo(padding.left, padding.top);
+  ctx.lineTo(padding.left, padding.top + innerHeight);
+  ctx.lineTo(width - padding.right, padding.top + innerHeight);
+  ctx.stroke();
+
+  ctx.fillStyle = "#53606f";
+  ctx.font = "12px Arial, Helvetica, sans-serif";
+  ctx.fillText(yMax.toFixed(1), 6, padding.top + 4);
+  ctx.fillText("0", 24, padding.top + innerHeight);
+  ctx.fillText(`${formatHours(fromHours)} ago`, padding.left, height - 8);
+  ctx.textAlign = "right";
+  ctx.fillText(toHours === 0 ? "now" : `${formatHours(toHours)} ago`, width - padding.right, height - 8);
+  ctx.textAlign = "left";
+
+  if (options.triggerLine) {
+    const triggerY = y(movementTrigger.threshold);
+    ctx.strokeStyle = "#d77b1f";
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(padding.left, triggerY);
+    ctx.lineTo(width - padding.right, triggerY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#d77b1f";
+    ctx.fillText(`trigger ${movementTrigger.threshold.toFixed(2)}`, padding.left + 6, triggerY - 6);
+  }
+
+  if (points.length === 0) {
+    ctx.fillStyle = "#53606f";
+    ctx.fillText("No movement score samples in this window.", padding.left + 12, padding.top + 32);
+    return;
+  }
+
+  ctx.strokeStyle = options.color || "#2f6fed";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const px = x(point.time);
+    const py = y(point.score);
+    if (index === 0) {
+      ctx.moveTo(px, py);
+    } else {
+      ctx.lineTo(px, py);
+    }
+  });
+  ctx.stroke();
+
+  ctx.fillStyle = options.color || "#2f6fed";
+  for (const point of points) {
+    const px = x(point.time);
+    const py = y(point.score);
+    ctx.beginPath();
+    ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function renderMovementCharts() {
+  normalizeHistoryWindow();
+  const aggregate = aggregateSamples(movementHistory.samples);
+  drawChart(aggregateChartEl, aggregate, { triggerLine: true, color: "#1f8a5b" });
+
+  const byNode = new Map();
+  for (const sample of movementHistory.samples) {
+    const key = String(sample.deviceId);
+    if (!byNode.has(key)) {
+      byNode.set(key, { name: sample.nodeName, samples: [] });
+    }
+    byNode.get(key).samples.push(sample);
+  }
+
+  nodeChartsEl.replaceChildren(
+    ...[...byNode.entries()].map(([deviceId, group]) => {
+      const card = document.createElement("article");
+      card.className = "chart-card";
+      appendText(card, "h3", `${group.name} Score`);
+      const canvas = document.createElement("canvas");
+      canvas.height = 160;
+      card.appendChild(canvas);
+      requestAnimationFrame(() => drawChart(canvas, group.samples, { color: "#2f6fed" }));
+      return card;
+    })
+  );
+}
+
+function updateHistorySliderMax(availableHours) {
+  const available = Number.isFinite(availableHours) && availableHours > 0 ? availableHours : 6;
+  const max = Math.max(0.25, Math.ceil(available * 4) / 4);
+  for (const input of [historyFromEl, historyToEl]) {
+    input.max = String(max);
+  }
+  if (movementHistory.range.availableHours > 0 && historyWindow.fromHours > max) {
+    historyWindow.fromHours = max;
+  }
+  historyFromEl.value = String(Math.min(historyWindow.fromHours, max));
+  historyToEl.value = String(Math.min(historyWindow.toHours, max));
+}
+
+async function refreshMovementHistory() {
+  normalizeHistoryWindow();
+  const query = new URLSearchParams({
+    fromHours: String(historyWindow.fromHours),
+    toHours: String(historyWindow.toHours)
+  });
+  movementHistory = await readJson(`/api/history/movement?${query}`);
+  updateHistorySliderMax(movementHistory.range.availableHours);
+  renderMovementCharts();
+}
+
+async function refreshMovementTrigger() {
+  movementTrigger = await readJson("/api/history/movement/trigger");
+  triggerLevelEl.value = String(movementTrigger.threshold);
+  triggerLevelLabelEl.textContent = Number(movementTrigger.threshold).toFixed(2);
+  triggerEnabledEl.checked = Boolean(movementTrigger.enabled);
+  renderMovementCharts();
+}
+
+async function saveMovementTrigger() {
+  movementTrigger = {
+    threshold: Number(triggerLevelEl.value),
+    enabled: triggerEnabledEl.checked
+  };
+  triggerLevelLabelEl.textContent = movementTrigger.threshold.toFixed(2);
+  renderMovementCharts();
+  await postJson("/api/history/movement/trigger", movementTrigger);
+}
+
 async function refreshAdmin() {
   currentAdmin = await readJson("/api/admin/summary");
   renderPush(currentAdmin);
@@ -712,6 +955,29 @@ document.querySelector("#backup-db").addEventListener("click", async () => {
   }, (result) => `Backup created: ${result.path}`);
 });
 
+for (const input of [historyFromEl, historyToEl]) {
+  input.addEventListener("input", renderMovementCharts);
+  input.addEventListener("change", () => {
+    refreshMovementHistory().catch((error) => setMessage(apiUnavailableMessage(error)));
+  });
+}
+
+triggerLevelEl.addEventListener("input", () => {
+  movementTrigger.threshold = Number(triggerLevelEl.value);
+  triggerLevelLabelEl.textContent = movementTrigger.threshold.toFixed(2);
+  renderMovementCharts();
+});
+
+triggerLevelEl.addEventListener("change", () => {
+  saveMovementTrigger().catch((error) => setMessage(apiUnavailableMessage(error)));
+});
+
+triggerEnabledEl.addEventListener("change", () => {
+  saveMovementTrigger().catch((error) => setMessage(apiUnavailableMessage(error)));
+});
+
+window.addEventListener("resize", renderMovementCharts);
+
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", (event) => {
     if (event.data?.type === "PUSH_SUBSCRIPTION_CHANGED") {
@@ -724,10 +990,15 @@ registerServiceWorker();
 attachNodeSettingsHelp();
 refreshStatus();
 refreshAdmin().catch((error) => setMessage(error.message));
+refreshMovementTrigger()
+  .then(refreshMovementHistory)
+  .catch((error) => setMessage(apiUnavailableMessage(error)));
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     refreshStatus();
+    refreshMovementHistory().catch(() => undefined);
   }
 });
 setInterval(refreshStatus, 5000);
 setInterval(() => refreshAdmin().catch(() => undefined), 30000);
+setInterval(() => refreshMovementHistory().catch(() => undefined), 30000);

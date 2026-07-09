@@ -44,6 +44,21 @@ export interface NodeRecord {
   payload: unknown;
 }
 
+export interface MovementScoreSample {
+  deviceId: number;
+  nodeName: string;
+  score: number;
+  movementDetected: boolean;
+  sampledAt: string;
+}
+
+export interface MovementTriggerSettings {
+  threshold: number;
+  enabled: boolean;
+  lastAbove: boolean;
+  updatedAt: string | null;
+}
+
 export interface SecuritySettings {
   cloudflareAccessExpected: boolean;
   appSessionsEnabled: boolean;
@@ -154,7 +169,28 @@ const migrations = [
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS movement_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id INTEGER NOT NULL,
+    node_name TEXT NOT NULL,
+    score REAL NOT NULL,
+    movement_detected INTEGER NOT NULL DEFAULT 0,
+    sampled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_movement_scores_sampled_at ON movement_scores(sampled_at);
+  CREATE INDEX IF NOT EXISTS idx_movement_scores_device_sampled ON movement_scores(device_id, sampled_at);
+
+  CREATE TABLE IF NOT EXISTS movement_trigger_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    threshold REAL NOT NULL DEFAULT 3.0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_above INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
+  );
+
   INSERT OR IGNORE INTO vapid_settings (id) VALUES (1);
+  INSERT OR IGNORE INTO movement_trigger_settings (id) VALUES (1);
   `
 ];
 
@@ -172,6 +208,19 @@ function readJson(raw: string): unknown {
   } catch {
     return {};
   }
+}
+
+function toNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function toDetected(value: unknown): boolean {
+  return value === true || value === 1 || value === "true" || value === "yes";
+}
+
+function isoHoursAgo(hours: number): string {
+  return new Date(Date.now() - Math.max(0, hours) * 3600000).toISOString().slice(0, 19).replace("T", " ");
 }
 
 export class AlarmDatabase {
@@ -341,6 +390,83 @@ export class AlarmDatabase {
           updated_at = CURRENT_TIMESTAMP`
       )
       .run(input.deviceId, input.name, input.ip, boolToDb(input.active), JSON.stringify(input.payload ?? {}));
+  }
+
+  recordMovementScores(nodes: Array<{ device_id: unknown; name: unknown; payload?: Record<string, unknown> }>) {
+    const insert = this.db.prepare(
+      "INSERT INTO movement_scores (device_id, node_name, score, movement_detected, sampled_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)"
+    );
+    const transaction = this.db.transaction(() => {
+      for (const node of nodes) {
+        const deviceId = toNumber(node.device_id);
+        const payload = node.payload ?? {};
+        const score = toNumber(payload.movement_score);
+        if (deviceId === null || score === null) {
+          continue;
+        }
+        insert.run(deviceId, String(node.name ?? `Movement${deviceId.toString(16).padStart(2, "0")}`), score, boolToDb(toDetected(payload.movement_detected)));
+      }
+    });
+    transaction();
+  }
+
+  movementHistory(hoursFrom: number, hoursTo: number) {
+    const fromHours = Math.max(hoursFrom, hoursTo);
+    const toHours = Math.min(hoursFrom, hoursTo);
+    const fromIso = isoHoursAgo(fromHours);
+    const toIso = isoHoursAgo(toHours);
+    const samples = this.db
+      .prepare(
+        `SELECT device_id AS deviceId, node_name AS nodeName, score, movement_detected AS movementDetected,
+          sampled_at AS sampledAt
+         FROM movement_scores
+         WHERE sampled_at >= ? AND sampled_at <= ?
+         ORDER BY sampled_at ASC, device_id ASC`
+      )
+      .all(fromIso, toIso)
+      .map((row: any) => ({ ...row, movementDetected: dbToBool(row.movementDetected) })) as MovementScoreSample[];
+    const maxHoursRow = this.db
+      .prepare("SELECT MIN(sampled_at) AS firstSampleAt FROM movement_scores")
+      .get() as { firstSampleAt: string | null };
+    const availableHours = maxHoursRow.firstSampleAt
+      ? Math.max(0, (Date.now() - Date.parse(`${maxHoursRow.firstSampleAt.replace(" ", "T")}Z`)) / 3600000)
+      : 0;
+    return {
+      range: { fromHours, toHours, availableHours },
+      samples
+    };
+  }
+
+  getMovementTriggerSettings(): MovementTriggerSettings {
+    const row = this.db
+      .prepare(
+        "SELECT threshold, enabled, last_above AS lastAbove, updated_at AS updatedAt FROM movement_trigger_settings WHERE id = 1"
+      )
+      .get() as { threshold: number; enabled: number; lastAbove: number; updatedAt: string | null };
+    return {
+      threshold: row.threshold,
+      enabled: dbToBool(row.enabled),
+      lastAbove: dbToBool(row.lastAbove),
+      updatedAt: row.updatedAt
+    };
+  }
+
+  saveMovementTriggerSettings(input: { threshold: number; enabled: boolean; lastAbove?: boolean }) {
+    const current = this.getMovementTriggerSettings();
+    this.db
+      .prepare(
+        `UPDATE movement_trigger_settings
+         SET threshold = ?, enabled = ?, last_above = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = 1`
+      )
+      .run(input.threshold, boolToDb(input.enabled), boolToDb(input.lastAbove ?? current.lastAbove));
+    this.audit("movement_trigger.update", "movement_trigger_settings", input);
+  }
+
+  setMovementTriggerLastAbove(lastAbove: boolean) {
+    this.db
+      .prepare("UPDATE movement_trigger_settings SET last_above = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1")
+      .run(boolToDb(lastAbove));
   }
 
   updateNode(id: number, input: { name: string; expected: boolean; active: boolean }) {

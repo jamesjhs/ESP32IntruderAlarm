@@ -11,6 +11,8 @@ import { AlarmDatabase, NodeRecord, SecuritySettings, UserRole } from "./db";
 const appConfig = loadConfig();
 const publicDir = path.resolve(__dirname, "..", "public");
 const db = new AlarmDatabase(appConfig.databasePath, appConfig.sqlCipherKey);
+let lastWorkerStatus: any = null;
+let lastWorkerStatusAt = 0;
 
 type PushSubscriptionBody = {
   endpoint?: string;
@@ -92,6 +94,94 @@ function syncWorkerNodes(status: any) {
       payload: node.payload ?? {}
     });
   }
+  db.recordMovementScores(status?.nodes ?? []);
+}
+
+async function checkMovementTrigger(status: any) {
+  const settings = db.getMovementTriggerSettings();
+  if (!settings.enabled) {
+    if (settings.lastAbove) {
+      db.setMovementTriggerLastAbove(false);
+    }
+    return;
+  }
+
+  const activeDeviceIds = new Set(db.listNodes().filter((node) => node.active).map((node) => node.deviceId));
+  const triggeredNodes = [];
+  let aggregateScore = 0;
+
+  for (const node of status?.nodes ?? []) {
+    const deviceId = Number(node.device_id);
+    if (!activeDeviceIds.has(deviceId)) {
+      continue;
+    }
+    const score = Number(node.payload?.movement_score);
+    if (!Number.isFinite(score)) {
+      continue;
+    }
+    aggregateScore = Math.max(aggregateScore, score);
+    if (score >= settings.threshold) {
+      triggeredNodes.push({
+        deviceId,
+        name: String(node.name ?? `Movement${deviceId.toString(16).padStart(2, "0")}`),
+        score
+      });
+    }
+  }
+
+  const above = aggregateScore >= settings.threshold && triggeredNodes.length > 0;
+  if (above && !settings.lastAbove) {
+    const timestamp = new Date().toISOString();
+    const title = "ESP32 movement trigger";
+    const body = `${triggeredNodes.map((node) => node.name).join(", ")} crossed ${settings.threshold.toFixed(2)} at ${timestamp}`;
+    const eventId = db.createEvent({
+      type: "movement_trigger",
+      severity: "warning",
+      title,
+      body,
+      metadata: {
+        timestamp,
+        threshold: settings.threshold,
+        aggregateScore,
+        nodes: triggeredNodes
+      }
+    });
+    await sendPushToEnabledSubscriptions({
+      type: "movement_trigger",
+      severity: "warning",
+      event_id: String(eventId),
+      title,
+      body,
+      timestamp_ms: Date.now(),
+      url: "/#movement-history"
+    });
+  }
+
+  if (above !== settings.lastAbove) {
+    db.setMovementTriggerLastAbove(above);
+  }
+}
+
+async function fetchAndProcessWorkerStatus() {
+  const response = await fetch(`${appConfig.workerInternalUrl}/internal/status`, {
+    headers: { accept: "application/json" }
+  });
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !contentType.includes("application/json")) {
+    return {
+      ok: false,
+      error: "worker status unavailable",
+      worker_status: response.status
+    };
+  }
+
+  const status = await response.json();
+  syncWorkerNodes(status);
+  await checkMovementTrigger(status);
+  lastWorkerStatus = status;
+  lastWorkerStatusAt = Date.now();
+  return status;
 }
 
 function findNodeByDeviceId(deviceId: number): NodeRecord | undefined {
@@ -186,23 +276,34 @@ export function buildServer() {
   }));
 
   server.get("/api/status", async (_request, reply) => {
-    const response = await fetch(`${appConfig.workerInternalUrl}/internal/status`, {
-      headers: { accept: "application/json" }
-    });
-
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!response.ok || !contentType.includes("application/json")) {
+    const status = Date.now() - lastWorkerStatusAt < 2500 && lastWorkerStatus ? lastWorkerStatus : await fetchAndProcessWorkerStatus();
+    if (status?.ok === false) {
       reply.code(502);
-      return {
-        ok: false,
-        error: "worker status unavailable",
-        worker_status: response.status
-      };
+      return status;
     }
-
-    const status = await response.json();
-    syncWorkerNodes(status);
     return status;
+  });
+
+  server.get<{ Querystring: { fromHours?: string; toHours?: string } }>("/api/history/movement", async (request) => {
+    const fromHours = Number(request.query.fromHours ?? "6");
+    const toHours = Number(request.query.toHours ?? "0");
+    return db.movementHistory(Number.isFinite(fromHours) ? fromHours : 6, Number.isFinite(toHours) ? toHours : 0);
+  });
+
+  server.get("/api/history/movement/trigger", async () => db.getMovementTriggerSettings());
+
+  server.post<{ Body: { threshold?: number; enabled?: boolean } }>("/api/history/movement/trigger", async (request, reply) => {
+    const threshold = Number(request.body?.threshold);
+    if (!Number.isFinite(threshold)) {
+      reply.code(400);
+      return { ok: false, error: "threshold is required" };
+    }
+    db.saveMovementTriggerSettings({
+      threshold,
+      enabled: request.body?.enabled ?? true,
+      lastAbove: false
+    });
+    return { ok: true, trigger: db.getMovementTriggerSettings() };
   });
 
   server.get("/api/push/vapid-public-key", async () => ({
@@ -403,6 +504,18 @@ export function buildServer() {
   server.register(fastifyStatic, {
     root: publicDir,
     prefix: "/"
+  });
+
+  let workerPollTimer: NodeJS.Timeout | undefined;
+  server.addHook("onReady", async () => {
+    workerPollTimer = setInterval(() => {
+      fetchAndProcessWorkerStatus().catch((error) => server.log.warn({ error }, "worker background poll failed"));
+    }, 5000);
+  });
+  server.addHook("onClose", async () => {
+    if (workerPollTimer) {
+      clearInterval(workerPollTimer);
+    }
   });
 
   return server;
