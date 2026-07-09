@@ -13,6 +13,7 @@ const mandatoryUpdateEl = document.querySelector("#mandatory-update");
 const usersListEl = document.querySelector("#users-list");
 const userFormEl = document.querySelector("#user-form");
 const vapidConfiguredEl = document.querySelector("#vapid-configured");
+const vapidFormEl = document.querySelector("#vapid-form");
 const pushCountEl = document.querySelector("#push-count");
 const pushSubscriptionsEl = document.querySelector("#push-subscriptions");
 const adminNodesListEl = document.querySelector("#admin-nodes-list");
@@ -32,6 +33,45 @@ const SECURITY_LABELS = {
 };
 
 let currentAdmin = null;
+let pendingHostVersion = null;
+
+function appendText(parent, tagName, text, className) {
+  const element = document.createElement(tagName);
+  element.textContent = text;
+  if (className) {
+    element.className = className;
+  }
+  parent.appendChild(element);
+  return element;
+}
+
+function asNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatScore(value) {
+  const number = asNumber(value);
+  return number === null ? "n/a" : number.toFixed(3);
+}
+
+function nodeHasMovement(payload) {
+  const flags = [
+    payload.movement_detected,
+    payload.motion_detected,
+    payload.movement,
+    payload.motion,
+    payload.detected,
+    payload.alarm_triggered
+  ];
+  if (flags.some((flag) => flag === true || flag === 1 || flag === "true" || flag === "yes")) {
+    return true;
+  }
+
+  const score = asNumber(payload.movement_score);
+  const threshold = asNumber(payload.movement_threshold ?? payload.threshold);
+  return score !== null && threshold !== null && score >= threshold;
+}
 
 async function readJson(url, options = {}) {
   const response = await fetch(url, {
@@ -73,36 +113,47 @@ function renderNodes(nodes) {
   nodesEl.replaceChildren(
     ...nodes.map((node) => {
       const item = document.createElement("div");
-      item.className = "node";
       const payload = node.payload || {};
-      item.innerHTML = `
-        <strong>${node.name}</strong>
-        <span>ID ${node.device_id} · ${node.state}</span>
-        <span>${node.ip}</span>
-        <span>Score ${payload.movement_score ?? "n/a"}</span>
-      `;
+      item.className = nodeHasMovement(payload) ? "node movement" : "node";
+      appendText(item, "strong", String(node.name ?? "Unnamed node"));
+      appendText(item, "span", `ID ${node.device_id} · ${node.state}`);
+      appendText(item, "span", String(node.ip ?? ""));
+      appendText(item, "span", `Score ${formatScore(payload.movement_score)}`);
       return item;
     })
   );
 }
 
 function showUpdateBanner(version, mandatory) {
+  pendingHostVersion = version;
   updateMessageEl.textContent = mandatory ? `Version ${version} is required` : `Version ${version} is available`;
   updateBannerEl.classList.remove("hidden");
   mandatoryUpdateEl.classList.toggle("hidden", !mandatory);
 }
 
 async function refreshAppPayload() {
-  const registrations = await navigator.serviceWorker?.getRegistrations?.();
-  if (registrations) {
-    await Promise.all(registrations.map((registration) => registration.unregister()));
+  try {
+    const registrations = await navigator.serviceWorker?.getRegistrations?.();
+    if (registrations) {
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    }
+  } catch (error) {
+    console.warn("Unable to unregister old service workers", error);
   }
-  if ("caches" in window) {
-    const keys = await caches.keys();
-    await Promise.all(keys.filter((key) => key.startsWith("esp32-alarm-")).map((key) => caches.delete(key)));
+  try {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((key) => key.startsWith("esp32-alarm-")).map((key) => caches.delete(key)));
+    }
+  } catch (error) {
+    console.warn("Unable to clear old app caches", error);
   }
-  localStorage.setItem(VERSION_KEY, appConfig.version);
-  window.location.reload();
+  if (pendingHostVersion) {
+    localStorage.setItem(VERSION_KEY, pendingHostVersion);
+  } else {
+    localStorage.removeItem(VERSION_KEY);
+  }
+  window.location.replace(`${window.location.pathname}?refresh=${Date.now()}${window.location.hash}`);
 }
 
 async function checkVersion() {
@@ -166,18 +217,25 @@ function renderUsers(users) {
   );
 }
 
+function setSelectValue(select, value) {
+  for (const option of select.options) {
+    option.selected = option.value === value;
+  }
+}
+
 function renderPush(admin) {
   vapidConfiguredEl.textContent = admin.vapid.privateKeyConfigured ? "yes" : "no";
+  vapidFormEl.elements.subject.value = admin.vapid.subject || "";
+  vapidFormEl.elements.publicKey.value = admin.vapid.publicKey || "";
+  vapidFormEl.elements.privateKey.value = admin.vapid.privateKey || "";
   pushCountEl.textContent = String(admin.pushSubscriptions.length);
   pushSubscriptionsEl.replaceChildren(
     ...admin.pushSubscriptions.map((subscription) => {
       const item = document.createElement("div");
       item.className = "record";
-      item.innerHTML = `
-        <strong>${subscription.deviceName}</strong>
-        <span>${subscription.enabled ? "enabled" : "disabled"} · failures ${subscription.failureCount}</span>
-        <small>${subscription.endpoint}</small>
-      `;
+      appendText(item, "strong", subscription.deviceName);
+      appendText(item, "span", `${subscription.enabled ? "enabled" : "disabled"} · failures ${subscription.failureCount}`);
+      appendText(item, "small", subscription.endpoint);
       return item;
     })
   );
@@ -225,11 +283,9 @@ function renderRecords(target, records, emptyText) {
     ...records.map((record) => {
       const item = document.createElement("div");
       item.className = "record";
-      item.innerHTML = `
-        <strong>${record.title || record.action}</strong>
-        <span>${record.type || record.target || ""}</span>
-        <small>${record.createdAt}</small>
-      `;
+      appendText(item, "strong", record.title || record.action);
+      appendText(item, "span", record.type || record.target || "");
+      appendText(item, "small", record.createdAt);
       return item;
     })
   );
@@ -353,6 +409,14 @@ adminNodesListEl.addEventListener("submit", async (event) => {
 document.querySelector("#generate-vapid").addEventListener("click", async () => {
   await postJson("/api/admin/vapid/generate");
   setMessage("VAPID keys generated.");
+  await refreshAdmin();
+});
+
+vapidFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(vapidFormEl);
+  await postJson("/api/admin/vapid", Object.fromEntries(form.entries()));
+  setMessage("VAPID keys saved.");
   await refreshAdmin();
 });
 

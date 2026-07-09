@@ -72,6 +72,9 @@ async function sendPushToEnabledSubscriptions(payload: unknown) {
 async function renderVersionedAsset(fileName: string) {
   const filePath = path.join(publicDir, fileName);
   const text = await fs.readFile(filePath, "utf8");
+  if (fileName === "index.html") {
+    return text.replaceAll("?v=0.0.1", `?v=${appConfig.version}`);
+  }
   if (fileName === "service-worker.js") {
     return text.replace('const APP_VERSION = "0.0.1";', `const APP_VERSION = ${JSON.stringify(appConfig.version)};`);
   }
@@ -93,6 +96,16 @@ function syncWorkerNodes(status: any) {
 export function buildServer() {
   const server = Fastify({
     logger: true
+  });
+
+  server.get("/", async (_request, reply) => {
+    reply.type("text/html; charset=utf-8").header("Cache-Control", "no-store");
+    return renderVersionedAsset("index.html");
+  });
+
+  server.get("/index.html", async (_request, reply) => {
+    reply.type("text/html; charset=utf-8").header("Cache-Control", "no-store");
+    return renderVersionedAsset("index.html");
   });
 
   server.get("/service-worker.js", async (_request, reply) => {
@@ -193,7 +206,7 @@ export function buildServer() {
 
   server.get("/api/admin/summary", async () => ({
     users: db.listUsers(),
-    vapid: db.getVapidSettings(),
+    vapid: db.getVapidSettings({ includePrivateKey: true }),
     pushSubscriptions: db.listPushSubscriptions(),
     nodes: db.listNodes(),
     security: db.getSecuritySettings(),
@@ -253,7 +266,7 @@ export function buildServer() {
         privateKey: request.body.privateKey,
         subject: request.body.subject || appConfig.vapidSubject
       });
-      return { ok: true, vapid: db.getVapidSettings() };
+      return { ok: true, vapid: db.getVapidSettings({ includePrivateKey: true }) };
     }
   );
 
@@ -264,7 +277,7 @@ export function buildServer() {
       privateKey: keys.privateKey,
       subject: appConfig.vapidSubject
     });
-    return { ok: true, vapid: db.getVapidSettings() };
+    return { ok: true, vapid: db.getVapidSettings({ includePrivateKey: true }) };
   });
 
   server.put<{ Params: { id: string }; Body: { name?: string; expected?: boolean; active?: boolean } }>(

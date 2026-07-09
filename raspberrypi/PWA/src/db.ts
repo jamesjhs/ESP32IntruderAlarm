@@ -15,6 +15,7 @@ export interface AdminUser {
 
 export interface VapidSettings {
   publicKey: string;
+  privateKey?: string;
   privateKeyConfigured: boolean;
   subject: string;
   updatedAt: string | null;
@@ -225,12 +226,13 @@ export class AlarmDatabase {
     this.audit("user.delete", `user:${id}`);
   }
 
-  getVapidSettings(): VapidSettings {
+  getVapidSettings(options: { includePrivateKey?: boolean } = {}): VapidSettings {
     const row = this.db
       .prepare("SELECT public_key AS publicKey, private_key AS privateKey, subject, updated_at AS updatedAt FROM vapid_settings WHERE id = 1")
       .get() as { publicKey: string; privateKey: string; subject: string; updatedAt: string | null };
     return {
       publicKey: row.publicKey,
+      privateKey: options.includePrivateKey ? row.privateKey : undefined,
       privateKeyConfigured: row.privateKey.length > 0,
       subject: row.subject,
       updatedAt: row.updatedAt

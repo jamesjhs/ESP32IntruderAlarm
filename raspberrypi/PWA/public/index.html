@@ -83,6 +83,12 @@
             <div><dt>Configured</dt><dd id="vapid-configured">unknown</dd></div>
             <div><dt>Subscriptions</dt><dd id="push-count">0</dd></div>
           </dl>
+          <form id="vapid-form" class="key-form">
+            <label>Subject <input name="subject" autocomplete="off"></label>
+            <label>Public key <textarea name="publicKey" rows="3" spellcheck="false"></textarea></label>
+            <label>Private key <textarea name="privateKey" rows="3" spellcheck="false"></textarea></label>
+            <button type="submit">Save Keys</button>
+          </form>
           <div id="push-subscriptions" class="records"></div>
         </article>
 
