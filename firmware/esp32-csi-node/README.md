@@ -132,6 +132,7 @@ baseline energy, variance, shape, and noise estimates. The dashboard and
 - `POST /api/config` accepts partial JSON config updates from the Pi dashboard
   or the local diagnostic page. Changes are saved to NVS.
 - `POST /api/calibrate` starts a 10 second stillness calibration.
+- `DELETE /api/calibration` deletes the current stillness calibration baseline.
 - `POST /api/provision` stores Wi-Fi credentials from the setup portal.
 - `POST /api/reset-wifi` clears stored Wi-Fi credentials and reboots into setup mode.
 

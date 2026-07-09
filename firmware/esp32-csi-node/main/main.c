@@ -35,7 +35,7 @@
 #define MAX_IDLE_RATE_HZ 100
 #define MIN_BOOST_RATE_HZ 10
 #define MAX_BOOST_RATE_HZ 250
-#define MIN_WINDOW_MS 50
+#define MIN_WINDOW_MS 0
 #define MAX_WINDOW_MS 1000
 #define MIN_BOOST_MS 0
 #define MAX_BOOST_MS 20000
@@ -59,6 +59,7 @@
 #define NODE_DISCOVERY_TIMEOUT_MS 180
 #define NODE_DISCOVERY_STACK 4096
 #define DNS_TASK_STACK 3072
+#define PI_TELEMETRY_STACK 4096
 #define MOVEMENT_LED_GPIO GPIO_NUM_2
 #define MOVEMENT_LED_ON_LEVEL 1
 #define MOVEMENT_LED_OFF_LEVEL 0
@@ -154,6 +155,7 @@ static volatile uint32_t csi_throttled_samples;
 static volatile uint32_t csi_queue_drops;
 static volatile uint32_t csi_accepted_samples;
 static volatile bool calibration_requested;
+static volatile bool calibration_delete_requested;
 static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
 static vprintf_like_t original_log_vprintf;
 static char log_lines[LOG_LINE_COUNT][LOG_LINE_LEN];
@@ -1225,6 +1227,28 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
         ESP_LOGI(TAG, "CSI stillness calibration started");
     }
 
+    if (calibration_delete_requested) {
+        calibration_delete_requested = false;
+        calibrating = false;
+        calibration_windows = 0;
+        baseline_energy = 0.0f;
+        baseline_variance = 0.0f;
+        baseline_shape = 0.0f;
+        baseline_phase = 0.0f;
+        baseline_phase_variance = 0.0f;
+        baseline_phase_noise = 0.01f;
+        baseline_noise = 0.05f;
+        trend_count = 0;
+        trend_index = 0;
+        detection_history = 0;
+        detection_count = 0;
+        confirm_windows = 0;
+        quiet_windows = 0;
+        g_status.state = SENSE_IDLE;
+        g_status.baseline_started_us = now;
+        ESP_LOGI(TAG, "CSI calibration data deleted; baseline will rebuild from live windows");
+    }
+
     if (baseline_energy <= 0.01f) {
         baseline_energy = mean_energy;
         baseline_variance = variance;
@@ -1386,7 +1410,8 @@ static void csi_aggregation_task(void *arg)
         configured_window_ms = g_config.feature_window_ms;
         xSemaphoreGive(state_lock);
 
-        TickType_t timeout = pdMS_TO_TICKS(configured_window_ms);
+        uint32_t effective_window_ms = configured_window_ms > 0 ? configured_window_ms : 1;
+        TickType_t timeout = pdMS_TO_TICKS(effective_window_ms);
         if (xQueueReceive(csi_queue, &sample, timeout) == pdTRUE) {
             last = sample;
             count++;
@@ -1414,7 +1439,7 @@ static void csi_aggregation_task(void *arg)
         }
 
         uint32_t elapsed_ms = (uint32_t)((now - window_start_us) / 1000LL);
-        if (elapsed_ms >= configured_window_ms) {
+        if (elapsed_ms >= effective_window_ms) {
             if (count > 0) {
                 float variance = count > 1 ? m2 / (float)(count - 1) : 0.0f;
                 float phase_variance = count > 1 ? phase_m2 / (float)(count - 1) : 0.0f;
@@ -1522,6 +1547,113 @@ static cJSON *status_to_json(void)
     cJSON_AddBoolToObject(root, "wifi_provisioned", status.wifi_provisioned);
     cJSON_AddBoolToObject(root, "sta_connected", status.sta_connected);
     return root;
+}
+
+static bool pi_response_acknowledged(const char *response, int http_status)
+{
+    if (http_status < 200 || http_status >= 300) {
+        return false;
+    }
+
+    const char *body = strstr(response, "\r\n\r\n");
+    if (body == NULL) {
+        return false;
+    }
+    body += 4;
+
+    cJSON *root = cJSON_Parse(body);
+    if (root == NULL) {
+        return false;
+    }
+
+    cJSON *ok = cJSON_GetObjectItem(root, "ok");
+    bool acknowledged = cJSON_IsTrue(ok);
+    cJSON_Delete(root);
+    return acknowledged;
+}
+
+static void pi_telemetry_task(void *arg)
+{
+    (void)arg;
+
+    while (true) {
+        node_config_t cfg;
+        node_status_t status;
+        xSemaphoreTake(state_lock, portMAX_DELAY);
+        cfg = g_config;
+        status = g_status;
+        xSemaphoreGive(state_lock);
+
+        if (status.sta_connected && cfg.pi_ip[0] != '\0') {
+            cJSON *json = status_to_json();
+            char *body = cJSON_PrintUnformatted(json);
+            cJSON_Delete(json);
+
+            if (body != NULL) {
+                int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+                if (sock >= 0) {
+                    struct timeval timeout = {
+                        .tv_sec = 3,
+                        .tv_usec = 0,
+                    };
+                    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+                    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+                    struct sockaddr_in dest = {0};
+                    dest.sin_family = AF_INET;
+                    dest.sin_port = htons(cfg.pi_port);
+                    inet_pton(AF_INET, cfg.pi_ip, &dest.sin_addr);
+
+                    if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) == 0) {
+                        char header[384];
+                        int header_len = snprintf(header, sizeof(header),
+                                                  "POST %s HTTP/1.1\r\n"
+                                                  "Host: %s:%u\r\n"
+                                                  "Content-Type: application/json\r\n"
+                                                  "Content-Length: %u\r\n"
+                                                  "Connection: close\r\n\r\n",
+                                                  cfg.pi_api_path, cfg.pi_ip, (unsigned)cfg.pi_port,
+                                                  (unsigned)strlen(body));
+
+                        if (header_len > 0 && header_len < (int)sizeof(header) &&
+                            send(sock, header, header_len, 0) == header_len &&
+                            send(sock, body, strlen(body), 0) == (int)strlen(body)) {
+                            char response[1024];
+                            int total = 0;
+                            while (total < (int)sizeof(response) - 1) {
+                                int len = recv(sock, response + total, sizeof(response) - 1 - total, 0);
+                                if (len <= 0) {
+                                    break;
+                                }
+                                total += len;
+                            }
+                            if (total > 0) {
+                                response[total] = '\0';
+                                int http_status = 0;
+                                sscanf(response, "HTTP/%*s %d", &http_status);
+                                if (pi_response_acknowledged(response, http_status)) {
+                                    ESP_LOGI(TAG, "Pi acknowledged telemetry receipt from %s:%u%s", cfg.pi_ip,
+                                             (unsigned)cfg.pi_port, cfg.pi_api_path);
+                                } else {
+                                    ESP_LOGW(TAG, "Pi telemetry post returned HTTP %d without acknowledgement", http_status);
+                                }
+                            } else {
+                                ESP_LOGW(TAG, "Pi telemetry post did not return a response");
+                            }
+                        } else {
+                            ESP_LOGW(TAG, "Pi telemetry post failed while sending request");
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "Pi telemetry connection failed to %s:%u", cfg.pi_ip, (unsigned)cfg.pi_port);
+                    }
+                    close(sock);
+                }
+                free(body);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(cfg.pi_post_interval_ms));
+    }
 }
 
 /**
@@ -1726,11 +1858,11 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<label class=\"control\"><span>Maximum Sample Rate</span><b id=\"bv\">80</b><input id=\"br\" type=\"range\" min=\"10\" max=\"250\" step=\"5\"></label>"
         "<label class=\"control\"><span>Boost Hold Time</span><b id=\"bdv\">8s</b><input id=\"bd\" type=\"range\" min=\"0\" max=\"20\" step=\"1\"></label>"
         "<label class=\"control\"><span>Cooldown Time</span><b id=\"cdv\">15s</b><input id=\"cd\" type=\"range\" min=\"0\" max=\"20\" step=\"1\"></label>"
-        "<label class=\"control\"><span>Feature Window</span><b id=\"fwv\">250ms</b><input id=\"fw\" type=\"range\" min=\"50\" max=\"1000\" step=\"50\"></label>"
+        "<label class=\"control\"><span>Feature Window</span><b id=\"fwv\">250ms</b><input id=\"fw\" type=\"range\" min=\"0\" max=\"1000\" step=\"50\"></label>"
         "<label class=\"control\"><span>Graph Score Max</span><b id=\"gmv\">10</b><input id=\"gm\" type=\"range\" min=\"1\" max=\"20\" step=\"1\" value=\"10\"></label>"
         "<label class=\"control\"><span>Graph Rate Max</span><b id=\"grv\">160</b><input id=\"gr\" type=\"range\" min=\"10\" max=\"250\" step=\"10\" value=\"160\"></label>"
         "<label class=\"control\"><span>Graph Update Rate</span><b id=\"guv\">1.0 Hz</b><input id=\"gu\" type=\"range\" min=\"0.2\" max=\"20\" step=\"0.2\" value=\"1\"></label></div>"
-        "<div class=\"actions\"><button id=\"cal\" type=\"button\">Auto-calibrate stillness</button><span id=\"calmsg\"></span></div>"
+        "<div class=\"actions\"><button id=\"cal\" type=\"button\">Auto-calibrate stillness</button><button id=\"delcal\" type=\"button\">Delete calibration data</button><span id=\"calmsg\"></span></div>"
         "<form method=\"post\" action=\"/api/provision\"><h2>Wi-Fi Provisioning</h2><input name=\"ssid\" placeholder=\"2.4 GHz SSID\" required>"
         "<input name=\"password\" type=\"password\" placeholder=\"Wi-Fi password\"><button type=\"submit\">Save Wi-Fi</button></form>"
         "<section class=\"glossary\"><h2>Dashboard Glossary</h2><dl>"
@@ -1771,7 +1903,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<dt>Graph Update Rate</dt><dd>How often this browser page polls and redraws. It affects the page only; high values add extra HTTP traffic.</dd>"
         "</dl></section>"
         "<script>const keys=['sensing_state','sample_rate_hz','accepted_csi_rate_hz','movement_score','baseline_noise','trend_score','phase_score','confirm_windows','quiet_windows','movement_detected','rssi','noise_floor','rejected_samples','filtered_samples','throttled_samples','queue_drops','last_packet_ms','accepted_samples','packet_count'];"
-        "let cfg=null,scoreMax=10,rateMax=160,timer=null,busy=false;const hist=[];function setText(e,v,d=1){e.textContent=Number(v).toFixed(d)}"
+        "let cfg=null,scoreMax=10,rateMax=160,timer=null,busy=false,msgUntil=0;const hist=[];function setText(e,v,d=1){e.textContent=Number(v).toFixed(d)}"
         "function fmt(k,v){return (['movement_score','baseline_noise','trend_score','phase_score'].includes(k))?Number(v).toFixed(3):v}"
         "function idLabel(v){return String(Number(v)||0)}"
         "function apiPath(){let p=pa.value.trim()||'/espdata';return p[0]=='/'?p:'/'+p}"
@@ -1788,9 +1920,10 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "function schedule(){clearTimeout(timer);timer=setTimeout(tick,Math.round(1000/Math.max(0.2,+gu.value)))}"
         "did.oninput=()=>didv.textContent=idLabel(did.value);pi.oninput=refreshPi;pp.oninput=refreshPi;pa.oninput=refreshPi;pt.oninput=()=>ptv.textContent=pt.value+'s';m.oninput=()=>{setText(mv,m.value);draw()};se.oninput=()=>{setText(sv,se.value);draw()};sn.oninput=()=>setText(snv,sn.value);ir.oninput=()=>iv.textContent=ir.value;br.oninput=()=>bv.textContent=br.value;bd.oninput=()=>bdv.textContent=bd.value+'s';cd.oninput=()=>cdv.textContent=cd.value+'s';fw.oninput=()=>fwv.textContent=fw.value+'ms';did.onchange=saveCfg;pi.onchange=saveCfg;pp.onchange=saveCfg;pa.onchange=saveCfg;pt.onchange=saveCfg;m.onchange=saveCfg;se.onchange=saveCfg;sn.onchange=saveCfg;ir.onchange=saveCfg;br.onchange=saveCfg;bd.onchange=saveCfg;cd.onchange=saveCfg;fw.onchange=saveCfg;gm.oninput=()=>{scoreMax=+gm.value;gmv.textContent=scoreMax;draw()};gr.oninput=()=>{rateMax=+gr.value;grv.textContent=rateMax;draw()};gu.oninput=()=>{guv.textContent=Number(gu.value).toFixed(1)+' Hz';schedule()};"
         "cal.onclick=async()=>{cal.disabled=true;calmsg.textContent='Keep the area still for 10 seconds';await fetch('/api/calibrate',{method:'POST'})};"
+        "delcal.onclick=async()=>{delcal.disabled=true;calmsg.textContent='Calibration data deleted';msgUntil=Date.now()+3000;await fetch('/api/calibration',{method:'DELETE'});setTimeout(()=>delcal.disabled=false,1000)};"
         "async function tick(){if(busy){schedule();return}busy=true;try{const r=await fetch('/status.json');const s=await r.json();title.textContent=s.name+' '+s.ip;"
         "grid.innerHTML=keys.map(k=>'<div class=tile><div class=label>'+k+'</div><div class=value>'+fmt(k,s[k])+'</div></div>').join('');"
-        "cal.disabled=!!s.calibrating;calmsg.textContent=s.calibrating?'Calibrating '+Math.ceil(s.calibration_remaining_ms/1000)+'s':'';"
+        "cal.disabled=!!s.calibrating;calmsg.textContent=s.calibrating?'Calibrating '+Math.ceil(s.calibration_remaining_ms/1000)+'s':(Date.now()<msgUntil?calmsg.textContent:'');"
         "hist.push({m:s.movement_score,r:s.sample_rate_hz});if(hist.length>120)hist.shift();draw()}finally{busy=false;schedule()}}"
         "init().then(()=>{guv.textContent=Number(gu.value).toFixed(1)+' Hz';tick()})</script></main></body></html>";
     httpd_resp_set_type(req, "text/html");
@@ -2029,6 +2162,19 @@ static esp_err_t calibrate_post_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"calibrating\":true,\"duration_ms\":10000}");
 }
 
+static esp_err_t calibration_delete_handler(httpd_req_t *req)
+{
+    calibration_delete_requested = true;
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    g_status.calibrating = false;
+    g_status.calibration_remaining_ms = 0;
+    g_status.baseline_age_s = 0;
+    xSemaphoreGive(state_lock);
+    ESP_LOGI(TAG, "CSI calibration deletion requested");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true,\"calibration_deleted\":true}");
+}
+
 /**
  * Introduction:
  * Handles Wi-Fi provisioning submissions. The handler accepts either JSON or
@@ -2127,6 +2273,7 @@ static void start_http_server(void)
     httpd_uri_t config_post = {.uri = "/api/config", .method = HTTP_POST, .handler = config_post_handler};
     httpd_uri_t config_options = {.uri = "/api/config", .method = HTTP_OPTIONS, .handler = options_handler};
     httpd_uri_t calibrate = {.uri = "/api/calibrate", .method = HTTP_POST, .handler = calibrate_post_handler};
+    httpd_uri_t calibration_delete = {.uri = "/api/calibration", .method = HTTP_DELETE, .handler = calibration_delete_handler};
     httpd_uri_t provision = {.uri = "/api/provision", .method = HTTP_POST, .handler = provision_post_handler};
     httpd_uri_t reset_wifi = {.uri = "/api/reset-wifi", .method = HTTP_POST, .handler = reset_wifi_post_handler};
     httpd_uri_t log_slash = {.uri = "/log/", .method = HTTP_GET, .handler = log_get_handler};
@@ -2140,6 +2287,7 @@ static void start_http_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &config_post));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &config_options));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibrate));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_delete));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &provision));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &reset_wifi));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &log_slash));
@@ -2187,6 +2335,7 @@ void app_main(void)
     init_wifi();
     start_http_server();
     xTaskCreate(csi_aggregation_task, "csi_aggregation", 4096, NULL, 5, NULL);
+    xTaskCreate(pi_telemetry_task, "pi_telemetry", PI_TELEMETRY_STACK, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "ESP32 CSI node ready");
 }

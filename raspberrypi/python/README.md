@@ -43,7 +43,7 @@ defaults.
 | --- | --- | --- |
 | `GET` | `/` | Human-readable landing page showing worker status and known nodes. |
 | `GET` | `/healthz` | Process health check. |
-| `POST` | `/espdata` | ESP32 telemetry ingest. |
+| `POST` | `/espdata` | ESP32 telemetry ingest. Responds with `ok: true` and `ack: "espdata_received"` when stored. |
 | `GET` | `/internal/status` | Live node state for the PWA service. |
 | `GET` | `/internal/nodes/{device_id}` | One node snapshot. |
 

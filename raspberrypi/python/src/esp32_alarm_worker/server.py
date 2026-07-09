@@ -53,7 +53,15 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
         except Exception:
             return web.json_response({"ok": False, "error": "invalid JSON telemetry"}, status=400)
 
-        return web.json_response({"ok": True, "node": snapshot.to_dict()})
+        return web.json_response(
+            {
+                "ok": True,
+                "ack": "espdata_received",
+                "received": True,
+                "device_id": snapshot.device_id,
+                "node": snapshot.to_dict(),
+            }
+        )
 
     async def status(_: web.Request) -> web.Response:
         return web.json_response(store.status(config.version))
