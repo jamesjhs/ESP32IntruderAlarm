@@ -10,8 +10,6 @@ const nodesEl = document.querySelector("#nodes");
 const updateBannerEl = document.querySelector("#update-banner");
 const updateMessageEl = document.querySelector("#update-message");
 const mandatoryUpdateEl = document.querySelector("#mandatory-update");
-const usersListEl = document.querySelector("#users-list");
-const userFormEl = document.querySelector("#user-form");
 const vapidConfiguredEl = document.querySelector("#vapid-configured");
 const vapidFormEl = document.querySelector("#vapid-form");
 const pushCountEl = document.querySelector("#push-count");
@@ -24,12 +22,30 @@ const auditListEl = document.querySelector("#audit-list");
 
 const VERSION_KEY = "esp32-alarm:last-seen-version";
 const SECURITY_LABELS = {
-  cloudflareAccessExpected: "Cloudflare Access expected",
-  appSessionsEnabled: "App sessions enabled",
-  csrfProtectionEnabled: "CSRF protection enabled",
-  loginRateLimitEnabled: "Login rate limiting enabled",
-  auditLoggingEnabled: "Audit logging enabled",
-  localRecoveryOnly: "Local recovery only"
+  cloudflareAccessExpected: {
+    label: "Cloudflare Access expected",
+    help: "Marks the public site as protected by Cloudflare Access before traffic reaches the Pi."
+  },
+  appSessionsEnabled: {
+    label: "App sessions enabled",
+    help: "Intended to require a local app login after Cloudflare admits the browser. Stored as a setting flag until login enforcement is added."
+  },
+  csrfProtectionEnabled: {
+    label: "CSRF protection enabled",
+    help: "Intended to require anti-forgery tokens for browser actions that change alarm or admin state."
+  },
+  loginRateLimitEnabled: {
+    label: "Login rate limiting enabled",
+    help: "Intended to slow or block repeated failed login attempts once app login is active."
+  },
+  auditLoggingEnabled: {
+    label: "Audit logging enabled",
+    help: "Records security-sensitive actions such as settings changes, backups, VAPID changes, and future login events."
+  },
+  localRecoveryOnly: {
+    label: "Local recovery only",
+    help: "Keeps owner recovery/setup flows limited to local or physical access rather than exposing them through the public hostname."
+  }
 };
 
 let currentAdmin = null;
@@ -210,62 +226,6 @@ async function refreshStatus() {
   }
 }
 
-function renderUsers(users) {
-  usersListEl.replaceChildren(
-    ...users.map((user) => {
-      const row = document.createElement("form");
-      row.className = "record-grid user-row";
-      row.dataset.id = String(user.id);
-      appendText(row, "strong", user.username);
-
-      const displayName = document.createElement("input");
-      displayName.name = "displayName";
-      displayName.value = user.displayName;
-      row.appendChild(displayName);
-
-      const role = document.createElement("select");
-      role.name = "role";
-      for (const value of ["viewer", "resident", "admin", "owner"]) {
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = value;
-        role.appendChild(option);
-      }
-      setSelectValue(role, user.role);
-      row.appendChild(role);
-
-      const state = document.createElement("select");
-      state.name = "state";
-      for (const value of ["active", "disabled", "setup-required"]) {
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = value;
-        state.appendChild(option);
-      }
-      setSelectValue(state, user.state);
-      row.appendChild(state);
-
-      const save = document.createElement("button");
-      save.type = "submit";
-      save.textContent = "Save";
-      row.appendChild(save);
-
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.dataset.deleteUser = String(user.id);
-      deleteButton.textContent = "Delete";
-      row.appendChild(deleteButton);
-      return row;
-    })
-  );
-}
-
-function setSelectValue(select, value) {
-  for (const option of select.options) {
-    option.selected = option.value === value;
-  }
-}
-
 function renderPush(admin) {
   vapidConfiguredEl.textContent = admin.vapid.privateKeyConfigured ? "yes" : "no";
   vapidFormEl.elements.subject.value = admin.vapid.subject || "";
@@ -332,9 +292,22 @@ function renderAdminNodes(nodes) {
 
 function renderSecurity(settings) {
   securityFormEl.replaceChildren(
-    ...Object.entries(SECURITY_LABELS).map(([key, label]) => {
+    ...Object.entries(SECURITY_LABELS).map(([key, option]) => {
       const row = document.createElement("label");
-      row.innerHTML = `<input type="checkbox" name="${key}" ${settings[key] ? "checked" : ""}> ${label}`;
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.name = key;
+      checkbox.checked = Boolean(settings[key]);
+      row.appendChild(checkbox);
+      row.append(` ${option.label}`);
+
+      const help = document.createElement("span");
+      help.className = "hover-help";
+      help.tabIndex = 0;
+      help.setAttribute("aria-label", option.help);
+      help.dataset.tooltip = option.help;
+      help.textContent = "?";
+      row.appendChild(help);
       return row;
     })
   );
@@ -359,7 +332,6 @@ function renderRecords(target, records, emptyText) {
 
 async function refreshAdmin() {
   currentAdmin = await readJson("/api/admin/summary");
-  renderUsers(currentAdmin.users);
   renderPush(currentAdmin);
   renderAdminNodes(currentAdmin.nodes);
   renderSecurity(currentAdmin.security);
@@ -432,35 +404,6 @@ async function unsubscribePush() {
 
 document.querySelector("#refresh-app").addEventListener("click", refreshAppPayload);
 document.querySelector("#mandatory-refresh").addEventListener("click", refreshAppPayload);
-
-userFormEl.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = new FormData(userFormEl);
-  await runAction(async () => {
-    await postJson("/api/admin/users", Object.fromEntries(form.entries()));
-    userFormEl.reset();
-    await refreshAdmin();
-  }, "User added.");
-});
-
-usersListEl.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const formEl = event.target;
-  const form = new FormData(formEl);
-  await runAction(async () => {
-    await putJson(`/api/admin/users/${formEl.dataset.id}`, Object.fromEntries(form.entries()));
-    await refreshAdmin();
-  }, "User saved.");
-});
-
-usersListEl.addEventListener("click", async (event) => {
-  const id = event.target.dataset?.deleteUser;
-  if (!id) return;
-  await runAction(async () => {
-    await readJson(`/api/admin/users/${id}`, { method: "DELETE" });
-    await refreshAdmin();
-  }, "User deleted.");
-});
 
 adminNodesListEl.addEventListener("submit", async (event) => {
   event.preventDefault();

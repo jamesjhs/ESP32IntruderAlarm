@@ -268,6 +268,7 @@ dd {
 
 .toggles label,
 .node-row label {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -282,6 +283,50 @@ dd {
 .message {
   min-height: 1.4em;
   color: #53606f;
+}
+
+.hover-help {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #cad3df;
+  border-radius: 50%;
+  background: #f5f7fb;
+  color: #18212f;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+
+.hover-help::after {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  width: min(280px, 70vw);
+  padding: 9px 10px;
+  border: 1px solid #cad3df;
+  border-radius: 6px;
+  background: #18212f;
+  color: #ffffff;
+  box-shadow: 0 10px 30px rgba(24, 33, 47, 0.18);
+  content: attr(data-tooltip);
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.hover-help:hover::after,
+.hover-help:focus::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 @media (max-width: 760px) {
