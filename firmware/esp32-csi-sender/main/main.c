@@ -528,7 +528,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<label>Wi-Fi password<input name=password type=password></label></div><div class=actions><button>Save Wi-Fi</button></div></form>"
         "<script>const f=document.querySelector('#cfg'),msg=document.querySelector('#msg'),s=document.querySelector('#s'),start=document.querySelector('#start'),stop=document.querySelector('#stop');"
         "async function json(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(await r.text());return r.json()}"
-        "function fill(c){for(const [k,v] of Object.entries(c)){if(k==='pi_post_interval_ms'){f.elements.pi_post_interval_s.value=Math.round((+v||5000)/1000);continue}const e=f.elements[k];if(!e)continue;if(e.type==='checkbox')e.checked=!!v;else e.value=v??''}}"
+        "function fill(c){for(const [k,v] of Object.entries(c)){if(k==='pi_post_interval_ms'){f.elements.pi_post_interval_s.value=Math.round((+v||5000)/1000);continue}const e=f.elements[k];if(!e)continue;if(e.type==='checkbox')e.checked=!!v;else e.value=(v==null?'':v)}}"
         "function payload(){const d=new FormData(f);return{device_id:+d.get('device_id'),name:String(d.get('name')||'').trim(),enabled:d.get('enabled')==='on',packet_rate_hz:+d.get('packet_rate_hz'),udp_port:+d.get('udp_port'),payload_size:+d.get('payload_size'),broadcast_ip:String(d.get('broadcast_ip')||'').trim(),pi_ip:String(d.get('pi_ip')||'').trim(),pi_port:+d.get('pi_port'),pi_api_path:String(d.get('pi_api_path')||'/espdata').trim(),pi_post_interval_ms:+d.get('pi_post_interval_s')*1000}}"
         "async function load(){const c=await json('/api/config');fill(c);await tick()}"
         "async function tick(){const j=await json('/status.json');s.textContent=JSON.stringify(j,null,2)}"
