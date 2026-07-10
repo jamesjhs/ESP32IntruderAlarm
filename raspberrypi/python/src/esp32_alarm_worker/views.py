@@ -1,3 +1,18 @@
+"""HTML rendering helpers for the Python telemetry worker.
+
+The TypeScript PWA is the real dashboard, but the LAN worker still exposes `/`
+as a lightweight status page for local debugging. This module keeps that HTML
+separate from `server.py` so request handling stays focused on JSON ingest and
+API routing.
+
+Interactions:
+- `server.index()` passes `NodeStore.status()` data into `render_index_html()`.
+- The rendered page links to `/internal/status`, the JSON endpoint consumed by
+  the PWA service.
+- All dynamic values are escaped here because the page displays ESP32-provided
+  names and IP data.
+"""
+
 from __future__ import annotations
 
 from html import escape
@@ -57,6 +72,7 @@ _ROW_TEMPLATE = """<tr>
 
 
 def render_index_html(status_data: dict[str, Any]) -> str:
+    """Render a self-refreshing worker status page from a status dictionary."""
     nodes = status_data.get("nodes", [])
     if nodes:
         rows = "".join(

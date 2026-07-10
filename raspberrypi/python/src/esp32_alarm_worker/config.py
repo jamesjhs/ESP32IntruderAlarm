@@ -1,3 +1,18 @@
+"""Configuration loading for the ESP32 telemetry worker.
+
+This module is the Python worker's equivalent of the PWA service's
+`src/config.ts`. It reads shared deployment settings from `raspberrypi/.env`,
+normalizes values that affect HTTP routing, and returns an immutable
+`WorkerConfig` object consumed by `server.py`.
+
+Interactions:
+- `server.py` calls `load_config()` during startup and stores the result on the
+  aiohttp application.
+- ESP32 firmware posts telemetry to `telemetry_path`, usually `/espdata`.
+- Optional UDP probe settings are used by `server.udp_probe_loop()` to stimulate
+  CSI traffic at a predictable rate during experiments.
+"""
+
 from __future__ import annotations
 
 import os
@@ -8,12 +23,14 @@ from dotenv import load_dotenv
 
 
 def _load_env() -> None:
+    """Load the shared Raspberry Pi `.env` file if it exists."""
     here = Path(__file__).resolve()
     raspberrypi_dir = here.parents[3]
     load_dotenv(raspberrypi_dir / ".env")
 
 
 def _bool_env(name: str, default: bool) -> bool:
+    """Parse common truthy environment values while preserving a default."""
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -22,6 +39,8 @@ def _bool_env(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class WorkerConfig:
+    """Runtime settings for the LAN-facing telemetry worker."""
+
     version: str
     host: str
     port: int
@@ -34,6 +53,7 @@ class WorkerConfig:
 
 
 def load_config() -> WorkerConfig:
+    """Read environment variables and return a sanitized worker configuration."""
     _load_env()
     telemetry_path = os.getenv("ESP32_TELEMETRY_PATH", "/espdata")
     if not telemetry_path.startswith("/"):

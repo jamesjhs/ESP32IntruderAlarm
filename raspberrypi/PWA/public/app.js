@@ -1,4 +1,29 @@
+/*
+ * Browser dashboard for the ESP32 Intruder Alarm PWA.
+ *
+ * Purpose:
+ * - Owns all client-side behavior for `public/index.html`: live status tiles,
+ *   movement history charts, admin panels, node settings modals, push
+ *   subscription controls, and version-update prompts.
+ * - Talks only to the Raspberry Pi TypeScript service in `src/server.ts`. The
+ *   browser does not call ESP32 devices directly; node status/config/calibration
+ *   actions are proxied through the Pi so CORS, timeout, and LAN-IP validation
+ *   live in one backend.
+ * - Registers `service-worker.js`, monitors `/api/version`, and prompts users
+ *   to refresh when the host app version changes.
+ *
+ * Interactions:
+ * - Reads `window.ALARM_APP_CONFIG` from `/app-config.js`.
+ * - Uses `/api/status` for Python-worker/ESP32 health, `/api/admin/summary` for
+ *   admin state, `/api/history/movement` for charts, `/api/push/*` for Web Push,
+ *   and `/api/nodes/:deviceId/*` for ESP32 node actions.
+ * - Receives service-worker messages when browser push subscription state
+ *   changes.
+ */
 const appConfig = window.ALARM_APP_CONFIG || { version: "0.2.1", build: null };
+
+// Static DOM references. The app shell is intentionally server-rendered HTML,
+// with this file attaching behavior and replacing content as API state arrives.
 const versionEl = document.querySelector("#version");
 const pwaStateEl = document.querySelector("#pwa-state");
 const workerStateEl = document.querySelector("#worker-state");
@@ -35,6 +60,8 @@ const triggerEnabledEl = document.querySelector("#trigger-enabled");
 const aggregateChartEl = document.querySelector("#aggregate-chart");
 const nodeChartsEl = document.querySelector("#node-charts");
 
+// Labels and tooltip text used by renderers. Keeping this copy in one place
+// avoids scattering explanatory text through DOM-construction code.
 const VERSION_KEY = "esp32-alarm:last-seen-version";
 const SECURITY_LABELS = {
   cloudflareAccessExpected: {
@@ -126,6 +153,11 @@ let movementHistory = { range: { fromHours: 6, toHours: 0, availableHours: 0 }, 
 let movementTrigger = { threshold: 3, enabled: true };
 let historyWindow = { fromHours: 6, toHours: 0 };
 
+/**
+ * Converts thrown fetch/API errors into messages that make sense to the user.
+ * The "Not Found" branch is especially helpful after backend changes, when a
+ * browser may still be pointed at an older running server process.
+ */
 function apiUnavailableMessage(error) {
   if (String(error?.message || "").includes("Not Found")) {
     return "Admin API unavailable. Rebuild and restart the PWA server so the new routes are active.";
@@ -133,6 +165,10 @@ function apiUnavailableMessage(error) {
   return error?.message || "Request failed.";
 }
 
+/**
+ * Runs a top-level UI action and reports success/failure in the main admin
+ * message area. Use this for actions outside the node settings modal.
+ */
 async function runAction(action, successMessage) {
   try {
     const result = await action();
@@ -146,6 +182,7 @@ async function runAction(action, successMessage) {
   }
 }
 
+/** Appends a text-only element and returns it for optional further decoration. */
 function appendText(parent, tagName, text, className) {
   const element = document.createElement(tagName);
   element.textContent = text;
@@ -156,22 +193,26 @@ function appendText(parent, tagName, text, className) {
   return element;
 }
 
+/** Safely coerces API values into finite numbers for charts and labels. */
 function asNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
+/** Formats ESP32 movement scores consistently across tiles and charts. */
 function formatScore(value) {
   const number = asNumber(value);
   return number === null ? "n/a" : number.toFixed(3);
 }
 
+/** Formats range-slider hour values without noisy trailing zeroes. */
 function formatHours(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "0h";
   return Number.isInteger(number) ? `${number}h` : `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}h`;
 }
 
+/** Truncates form decimals before sending them to the ESP32 firmware. */
 function truncateToDecimals(value, decimals) {
   const number = asNumber(value);
   if (number === null) return null;
@@ -179,11 +220,13 @@ function truncateToDecimals(value, decimals) {
   return Math.trunc((number + Number.EPSILON) * factor) / factor;
 }
 
+/** Truncates and formats a decimal for stable form display. */
 function formatTruncated(value, decimals) {
   const number = truncateToDecimals(value, decimals);
   return number === null ? "" : number.toFixed(decimals);
 }
 
+/** Adds the small hover/focus help marker used throughout settings forms. */
 function appendHelp(parent, text) {
   const help = document.createElement("span");
   help.className = "hover-help";
@@ -195,6 +238,7 @@ function appendHelp(parent, text) {
   return help;
 }
 
+/** Parses SQLite timestamp strings as UTC so chart windows align across clients. */
 function parseSampleTime(value) {
   if (!value) return Date.now();
   const normalized = String(value).includes("T") ? String(value) : String(value).replace(" ", "T");
@@ -202,6 +246,7 @@ function parseSampleTime(value) {
   return Number.isFinite(timestamp) ? timestamp : Date.now();
 }
 
+/** Infers whether a node card should be highlighted as currently seeing movement. */
 function nodeHasMovement(payload) {
   const flags = [
     payload.movement_detected,
@@ -220,6 +265,12 @@ function nodeHasMovement(payload) {
   return score !== null && threshold !== null && score >= threshold;
 }
 
+/**
+ * Fetches JSON from the Pi API and rejects non-JSON responses.
+ *
+ * Cloudflare Access or an offline fallback may return HTML; treating that as an
+ * error keeps the dashboard from trying to parse a login page as alarm data.
+ */
 async function readJson(url, options = {}) {
   const response = await fetch(url, {
     cache: "no-store",
@@ -237,22 +288,27 @@ async function readJson(url, options = {}) {
   return payload;
 }
 
+/** Convenience wrapper for JSON POST requests. */
 function postJson(url, body = {}) {
   return readJson(url, { method: "POST", body: JSON.stringify(body) });
 }
 
+/** Convenience wrapper for JSON PUT requests. */
 function putJson(url, body = {}) {
   return readJson(url, { method: "PUT", body: JSON.stringify(body) });
 }
 
+/** Writes a main-page status message. */
 function setMessage(message) {
   adminMessageEl.textContent = message;
 }
 
+/** Writes a node-settings-modal status message. */
 function setNodeSettingsMessage(message) {
   nodeSettingsMessageEl.textContent = message;
 }
 
+/** Runs an action scoped to the node settings modal. */
 async function runNodeAction(action, successMessage) {
   try {
     const result = await action();
@@ -266,10 +322,18 @@ async function runNodeAction(action, successMessage) {
   }
 }
 
+/** Finds the persisted Pi registry row that corresponds to an ESP32 device_id. */
 function nodeRecordFor(deviceId) {
   return currentAdmin?.nodes?.find((node) => Number(node.deviceId) === Number(deviceId)) || null;
 }
 
+/**
+ * Renders the ESP32 Nodes card from live worker telemetry plus Pi registry data.
+ *
+ * The Pi registry supplies user-edited names and active flags; live telemetry
+ * supplies IP, state, score, and device_id. Settings and Identify buttons call
+ * Pi proxy routes, not ESP32 devices directly.
+ */
 function renderNodes(nodes) {
   lastStatusNodes = nodes;
   if (!nodes.length) {
@@ -348,6 +412,12 @@ function showUpdateBanner(version, mandatory) {
   mandatoryUpdateEl.classList.toggle("hidden", !mandatory);
 }
 
+/**
+ * Forces a full app-payload refresh after a version change.
+ *
+ * This unregisters older service workers and removes old versioned caches before
+ * reloading, which is more reliable for installed PWAs than a normal page reload.
+ */
 async function refreshAppPayload() {
   try {
     const registrations = await navigator.serviceWorker?.getRegistrations?.();
@@ -373,6 +443,7 @@ async function refreshAppPayload() {
   window.location.replace(`${window.location.pathname}?refresh=${Date.now()}${window.location.hash}`);
 }
 
+/** Checks the host version and shows an update banner if this client is stale. */
 async function checkVersion() {
   const version = await readJson("/api/version");
   versionEl.textContent = version.version;
@@ -386,6 +457,7 @@ async function checkVersion() {
   return version;
 }
 
+/** Refreshes the live system status tiles and node list from /api/status. */
 async function refreshStatus() {
   try {
     await checkVersion();
@@ -407,6 +479,7 @@ async function refreshStatus() {
   }
 }
 
+/** Renders VAPID and push subscription admin state. */
 function renderPush(admin) {
   vapidConfiguredEl.textContent = admin.vapid.privateKeyConfigured ? "yes" : "no";
   vapidFormEl.elements.subject.value = admin.vapid.subject || "";
@@ -425,6 +498,7 @@ function renderPush(admin) {
   );
 }
 
+/** Renders persisted security posture flags into editable checkboxes. */
 function renderSecurity(settings) {
   securityFormEl.replaceChildren(
     ...Object.entries(SECURITY_LABELS).map(([key, option]) => {
@@ -442,6 +516,7 @@ function renderSecurity(settings) {
   );
 }
 
+/** Attaches help text to node settings fields and modal action buttons. */
 function attachNodeSettingsHelp() {
   for (const [name, help] of Object.entries(NODE_CONFIG_HELP)) {
     const input = nodeConfigFormEl.elements[name];
@@ -479,6 +554,7 @@ function attachNodeSettingsHelp() {
   }
 }
 
+/** Renders simple record lists such as events and audit log entries. */
 function renderRecords(target, records, emptyText) {
   if (!records.length) {
     target.textContent = emptyText;
@@ -496,6 +572,7 @@ function renderRecords(target, records, emptyText) {
   );
 }
 
+/** Renders the selected ESP32 node's live status fields in the modal. */
 function renderNodeStatus(status) {
   const keys = [
     "sensing_state",
@@ -525,14 +602,17 @@ function renderNodeStatus(status) {
   );
 }
 
+/** Writes a number-ish value into a form field without decimal formatting. */
 function setFormNumber(form, name, value) {
   form.elements[name].value = value === undefined || value === null ? "" : String(value);
 }
 
+/** Writes a decimal value into a form field with fixed precision. */
 function setFormDecimal(form, name, value, decimals) {
   form.elements[name].value = formatTruncated(value, decimals);
 }
 
+/** Populates the ESP32 configuration form from the node /api/config response. */
 function populateNodeConfigForm(config) {
   attachNodeSettingsHelp();
   nodeConfigFormEl.elements.device_id.value = config.device_id ?? "";
@@ -551,6 +631,7 @@ function populateNodeConfigForm(config) {
   setFormNumber(nodeConfigFormEl, "feature_window_ms", config.feature_window_ms);
 }
 
+/** Populates persisted calibration fields from the node /api/calibration response. */
 function populateNodeCalibrationForm(calibration) {
   attachNodeSettingsHelp();
   nodeCalibrationFormEl.elements.valid.value = calibration.valid ? "yes" : "no";
@@ -564,6 +645,7 @@ function populateNodeCalibrationForm(calibration) {
   setFormDecimal(nodeCalibrationFormEl, "baseline_phase_noise", calibration.baseline_phase_noise, 6);
 }
 
+/** Builds the JSON patch sent to the ESP32 /api/config endpoint. */
 function nodeConfigPayload() {
   const form = new FormData(nodeConfigFormEl);
   const apiPath = String(form.get("pi_api_path") || "/espdata").trim();
@@ -585,6 +667,7 @@ function nodeConfigPayload() {
   };
 }
 
+/** Builds the JSON patch sent to the ESP32 /api/calibration endpoint. */
 function nodeCalibrationPayload() {
   const form = new FormData(nodeCalibrationFormEl);
   return {
@@ -599,12 +682,14 @@ function nodeCalibrationPayload() {
   };
 }
 
+/** Refreshes only the selected node's live status panel. */
 async function refreshSelectedNodeStatus() {
   if (selectedNodeDeviceId === null) return;
   const status = await readJson(`/api/nodes/${selectedNodeDeviceId}/status`);
   renderNodeStatus(status);
 }
 
+/** Refreshes only the selected node's persisted calibration panel. */
 async function refreshSelectedNodeCalibration() {
   if (selectedNodeDeviceId === null) return null;
   const calibration = await readJson(`/api/nodes/${selectedNodeDeviceId}/calibration`);
@@ -612,6 +697,11 @@ async function refreshSelectedNodeCalibration() {
   return calibration;
 }
 
+/**
+ * Opens the node settings modal and loads status, config, and calibration data.
+ * The modal keeps the current `device_id` in module state so button handlers can
+ * share one selected-node context.
+ */
 async function openNodeSettings(deviceId) {
   selectedNodeDeviceId = Number(deviceId);
   const liveNode = lastStatusNodes.find((node) => Number(node.device_id) === selectedNodeDeviceId);
@@ -638,6 +728,7 @@ async function openNodeSettings(deviceId) {
   }
 }
 
+/** Closes and resets the node settings modal. */
 function closeNodeSettings() {
   nodeSettingsModalEl.classList.add("hidden");
   selectedNodeDeviceId = null;
@@ -647,6 +738,7 @@ function closeNodeSettings() {
   setNodeSettingsMessage("");
 }
 
+/** Normalizes the dual history sliders into a valid [from, to] hour window. */
 function normalizeHistoryWindow() {
   let fromHours = Number(historyFromEl.value);
   let toHours = Number(historyToEl.value);
@@ -666,6 +758,10 @@ function normalizeHistoryWindow() {
   historyRangeLabelEl.textContent = `Showing ${formatHours(fromHours)} to ${formatHours(toHours)} before now.`;
 }
 
+/**
+ * Prepares a canvas for high-DPI drawing without letting device-pixel-ratio
+ * scaling inflate the visible chart height on every redraw.
+ */
 function chartDimensions(canvas) {
   const rect = canvas.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
@@ -681,6 +777,7 @@ function chartDimensions(canvas) {
   return { ctx, width, height };
 }
 
+/** Filters and sorts movement samples for the currently selected history window. */
 function pointsForSamples(samples, now, fromHours, toHours) {
   const fromTime = now - fromHours * 3600000;
   const toTime = now - toHours * 3600000;
@@ -690,6 +787,7 @@ function pointsForSamples(samples, now, fromHours, toHours) {
     .sort((a, b) => a.time - b.time);
 }
 
+/** Collapses all nodes into one aggregate series using the max score per timestamp. */
 function aggregateSamples(samples) {
   const buckets = new Map();
   for (const sample of samples) {
@@ -710,6 +808,12 @@ function aggregateSamples(samples) {
   return [...buckets.values()];
 }
 
+/**
+ * Draws one movement score chart onto a canvas.
+ *
+ * The y-axis auto-scales to visible data and trigger threshold, while the canvas
+ * height remains fixed by chartDimensions().
+ */
 function drawChart(canvas, samples, options = {}) {
   const { ctx, width, height } = chartDimensions(canvas);
   const now = Date.now();
@@ -804,6 +908,7 @@ function drawChart(canvas, samples, options = {}) {
   }
 }
 
+/** Redraws the aggregate chart and per-node charts from cached history data. */
 function renderMovementCharts() {
   normalizeHistoryWindow();
   const aggregate = aggregateSamples(movementHistory.samples);
@@ -832,6 +937,7 @@ function renderMovementCharts() {
   );
 }
 
+/** Extends the history sliders to cover all retained movement samples. */
 function updateHistorySliderMax(availableHours) {
   const available = Number.isFinite(availableHours) && availableHours > 0 ? availableHours : 6;
   const max = Math.max(0.25, Math.ceil(available * 4) / 4);
@@ -845,6 +951,7 @@ function updateHistorySliderMax(availableHours) {
   historyToEl.value = String(Math.min(historyWindow.toHours, max));
 }
 
+/** Fetches movement history for the selected time window and redraws charts. */
 async function refreshMovementHistory() {
   normalizeHistoryWindow();
   const query = new URLSearchParams({
@@ -856,6 +963,7 @@ async function refreshMovementHistory() {
   renderMovementCharts();
 }
 
+/** Fetches Pi-side trigger threshold/settings and redraws trigger line. */
 async function refreshMovementTrigger() {
   movementTrigger = await readJson("/api/history/movement/trigger");
   triggerLevelEl.max = "30";
@@ -865,6 +973,7 @@ async function refreshMovementTrigger() {
   renderMovementCharts();
 }
 
+/** Persists the Pi-side trigger threshold/settings. */
 async function saveMovementTrigger() {
   movementTrigger = {
     threshold: Number(triggerLevelEl.value),
@@ -875,6 +984,7 @@ async function saveMovementTrigger() {
   await postJson("/api/history/movement/trigger", movementTrigger);
 }
 
+/** Refreshes admin summary data used by push, records, nodes, and settings panels. */
 async function refreshAdmin() {
   currentAdmin = await readJson("/api/admin/summary");
   renderPush(currentAdmin);
@@ -886,6 +996,7 @@ async function refreshAdmin() {
   renderRecords(auditListEl, currentAdmin.auditLog, "No audit records yet.");
 }
 
+/** Converts a VAPID public key from URL-safe base64 into PushManager bytes. */
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -893,6 +1004,7 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
 }
 
+/** Registers the service worker and reports its current state in the dashboard. */
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) {
     swStateEl.textContent = "unsupported";
@@ -918,6 +1030,7 @@ async function registerServiceWorker() {
   }
 }
 
+/** Requests browser notification permission and stores this browser subscription. */
 async function subscribePush() {
   const vapid = await readJson("/api/push/vapid-public-key");
   if (!vapid.publicKey) {
@@ -939,6 +1052,7 @@ async function subscribePush() {
   pushStateEl.textContent = "subscribed";
 }
 
+/** Removes this browser's push subscription locally and from the Pi database. */
 async function unsubscribePush() {
   const registration = await navigator.serviceWorker.ready;
   const subscription = await registration.pushManager.getSubscription();
@@ -952,6 +1066,8 @@ async function unsubscribePush() {
 document.querySelector("#refresh-app").addEventListener("click", refreshAppPayload);
 document.querySelector("#mandatory-refresh").addEventListener("click", refreshAppPayload);
 
+// Node list interactions use event delegation because the ESP32 Nodes card is
+// re-rendered whenever fresh worker/admin data arrives.
 nodesEl.addEventListener("change", async (event) => {
   const checkbox = event.target;
   if (checkbox.type !== "checkbox" || !checkbox.dataset.nodeRecordId) return;
@@ -961,6 +1077,11 @@ nodesEl.addEventListener("change", async (event) => {
   }, "Node active state saved.");
 });
 
+/**
+ * Saves a node display name to the Pi registry and, when reachable, to the ESP32
+ * itself. Keeping both names aligned prevents the next telemetry poll from
+ * making the UI look like the rename did not stick.
+ */
 async function saveNodeFriendlyName(input) {
   if (!input.dataset.nodeRecordId) return;
   const name = input.value.trim();
@@ -986,6 +1107,8 @@ nodesEl.addEventListener("focusout", async (event) => {
   await saveNodeFriendlyName(event.target);
 });
 
+// Enter commits a name edit by blurring the input, which triggers the same save
+// path as clicking elsewhere.
 nodesEl.addEventListener("keydown", async (event) => {
   if (!event.target.classList?.contains("node-name-input")) return;
   if (event.key === "Enter") {
@@ -994,6 +1117,8 @@ nodesEl.addEventListener("keydown", async (event) => {
   }
 });
 
+// Distinguish Identify from Settings by using separate data attributes on the
+// buttons. Both actions call Pi proxy endpoints.
 nodesEl.addEventListener("click", async (event) => {
   const identifyDeviceId = event.target.dataset?.identifyDeviceId;
   if (identifyDeviceId) {
@@ -1010,6 +1135,8 @@ nodesEl.addEventListener("click", async (event) => {
 
 document.querySelector("#close-node-settings").addEventListener("click", closeNodeSettings);
 
+// Node settings modal actions. These all operate through the Pi proxy so the
+// browser never needs direct LAN access to an ESP32.
 document.querySelector("#refresh-node-status").addEventListener("click", async () => {
   await runNodeAction(async () => {
     await refreshSelectedNodeStatus();
@@ -1056,6 +1183,7 @@ nodeCalibrationFormEl.addEventListener("submit", async (event) => {
   }, "Calibration saved to ESP32 NVS.");
 });
 
+// Admin and push management actions.
 document.querySelector("#generate-vapid").addEventListener("click", async () => {
   await runAction(async () => {
     await postJson("/api/admin/vapid/generate");
@@ -1116,6 +1244,8 @@ document.querySelector("#backup-db").addEventListener("click", async () => {
   }, (result) => `Backup created: ${result.path}`);
 });
 
+// Movement history controls redraw immediately while sliding, then fetch fresh
+// persisted samples when the user releases/commits the range.
 for (const input of [historyFromEl, historyToEl]) {
   input.addEventListener("input", renderMovementCharts);
   input.addEventListener("change", () => {
@@ -1123,6 +1253,8 @@ for (const input of [historyFromEl, historyToEl]) {
   });
 }
 
+// Trigger threshold is a Pi-side display/alert setting, independent of the
+// ESP32 firmware threshold configured on each node.
 triggerLevelEl.addEventListener("input", () => {
   movementTrigger.threshold = Number(triggerLevelEl.value);
   triggerLevelLabelEl.textContent = movementTrigger.threshold.toFixed(2);
@@ -1139,6 +1271,8 @@ triggerEnabledEl.addEventListener("change", () => {
 
 window.addEventListener("resize", renderMovementCharts);
 
+// Service worker may tell open pages that browser push subscription state has
+// changed, for example after the user agent rotates a subscription.
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", (event) => {
     if (event.data?.type === "PUSH_SUBSCRIPTION_CHANGED") {
@@ -1147,6 +1281,9 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+// Initial boot sequence. These calls are intentionally independent enough that a
+// failure in push/service-worker setup does not prevent status and admin data
+// from rendering.
 registerServiceWorker();
 attachNodeSettingsHelp();
 refreshStatus();
@@ -1154,6 +1291,9 @@ refreshAdmin().catch((error) => setMessage(error.message));
 refreshMovementTrigger()
   .then(refreshMovementHistory)
   .catch((error) => setMessage(apiUnavailableMessage(error)));
+
+// Installed PWAs can remain open for long periods. Refresh when the user returns
+// to the app and on intervals while visible/open.
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     refreshStatus();

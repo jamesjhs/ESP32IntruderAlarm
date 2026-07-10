@@ -8,9 +8,17 @@ import webpush from "web-push";
 import { loadConfig } from "./config";
 import { AlarmDatabase, NodeRecord, SecuritySettings, UserRole } from "./db";
 
+// Process-level setup is intentionally done once at module load. The Fastify
+// app, route handlers, push sender, and background worker poll all share the
+// same configuration and database handle so state changes are immediately
+// visible across requests.
 const appConfig = loadConfig();
 const publicDir = path.resolve(__dirname, "..", "public");
 const db = new AlarmDatabase(appConfig.databasePath, appConfig.sqlCipherKey);
+
+// The Python worker can be polled by browsers via /api/status and by the
+// background timer below. Cache the most recent good response briefly so the PWA
+// can refresh frequently without hammering the worker on every browser request.
 let lastWorkerStatus: any = null;
 let lastWorkerStatusAt = 0;
 
@@ -24,10 +32,20 @@ type PushSubscriptionBody = {
   userId?: number | null;
 };
 
+/**
+ * Checks whether an arbitrary request body value is one of the supported admin
+ * roles. Keeping this as a type guard lets route handlers validate external JSON
+ * and then pass a strongly-typed role into the database layer.
+ */
 function validRole(role: unknown): role is UserRole {
   return role === "owner" || role === "admin" || role === "resident" || role === "viewer";
 }
 
+/**
+ * Loads VAPID private settings from the database and configures the web-push
+ * library for the current process. Returns false when keys are not configured so
+ * callers can skip push delivery cleanly instead of throwing on every attempt.
+ */
 function configureWebPush() {
   const vapid = db.getVapidPrivateSettings();
   if (vapid.publicKey && vapid.privateKey) {
@@ -37,6 +55,11 @@ function configureWebPush() {
   return false;
 }
 
+/**
+ * Converts the subscription shape stored in SQLite into the Web Push API shape
+ * expected by the `web-push` package. The database stores key columns flat for
+ * easier querying; the sender needs them nested under `keys`.
+ */
 function normalizePushSubscription(row: { endpoint: string; p256dh: string; auth: string }) {
   return {
     endpoint: row.endpoint,
@@ -47,6 +70,14 @@ function normalizePushSubscription(row: { endpoint: string; p256dh: string; auth
   };
 }
 
+/**
+ * Sends one payload to every enabled push subscription.
+ *
+ * Expired subscriptions are deleted when push relay services return 404/410.
+ * Other failures disable the subscription and retain the error so the admin UI
+ * can show why a browser stopped receiving notifications. The return value is a
+ * compact delivery summary used by test-push and movement-trigger routes.
+ */
 async function sendPushToEnabledSubscriptions(payload: unknown) {
   if (!configureWebPush()) {
     return { sent: 0, failed: 0, skipped: true };
@@ -72,6 +103,14 @@ async function sendPushToEnabledSubscriptions(payload: unknown) {
   return { sent, failed, skipped: false };
 }
 
+/**
+ * Reads a public asset and injects the active application version.
+ *
+ * The files in `public/` contain `0.2.1` as a local development sentinel. At
+ * runtime this helper replaces that sentinel with `APP_VERSION`/environment
+ * config so installed PWAs see new cache names and asset query strings after a
+ * deployment.
+ */
 async function renderVersionedAsset(fileName: string) {
   const filePath = path.join(publicDir, fileName);
   const text = await fs.readFile(filePath, "utf8");
@@ -84,6 +123,14 @@ async function renderVersionedAsset(fileName: string) {
   return text.replaceAll("?v=0.2.1", `?v=${appConfig.version}`);
 }
 
+/**
+ * Mirrors the Python worker's live node list into the PWA database.
+ *
+ * This keeps the admin node registry fresh with IPs, payload snapshots, and last
+ * seen timestamps. The upsert deliberately preserves an existing user-edited Pi
+ * display name, while still using the worker-reported name when a node is first
+ * discovered. Movement scores are also recorded for history charts.
+ */
 function syncWorkerNodes(status: any) {
   for (const node of status?.nodes ?? []) {
     db.upsertNode({
@@ -97,6 +144,14 @@ function syncWorkerNodes(status: any) {
   db.recordMovementScores(status?.nodes ?? []);
 }
 
+/**
+ * Evaluates the Pi-side movement trigger against the latest worker status.
+ *
+ * The ESP32 nodes produce per-node movement scores, but this service owns the
+ * aggregate chart threshold and push notification policy. A push is sent only
+ * when the aggregate crosses from below to above the configured threshold, which
+ * avoids repeat notifications while the signal remains high.
+ */
 async function checkMovementTrigger(status: any) {
   const settings = db.getMovementTriggerSettings();
   if (!settings.enabled) {
@@ -162,6 +217,11 @@ async function checkMovementTrigger(status: any) {
   }
 }
 
+/**
+ * Fetches live status from the Python worker and performs all side effects that
+ * should follow a successful poll: sync node records, append movement samples,
+ * evaluate push triggers, and update the short-lived in-memory cache.
+ */
 async function fetchAndProcessWorkerStatus() {
   const response = await fetch(`${appConfig.workerInternalUrl}/internal/status`, {
     headers: { accept: "application/json" }
@@ -184,10 +244,23 @@ async function fetchAndProcessWorkerStatus() {
   return status;
 }
 
+/**
+ * Finds the PWA database record for a logical ESP32 `device_id`.
+ *
+ * Routes use this registry record to discover the current LAN IP for proxying
+ * commands to a node. Returning undefined lets the caller produce a clean 404.
+ */
 function findNodeByDeviceId(deviceId: number): NodeRecord | undefined {
   return db.listNodes().find((node) => node.deviceId === deviceId);
 }
 
+/**
+ * Builds the base URL for direct ESP32 node requests.
+ *
+ * Only ordinary LAN IPv4 addresses are allowed. Empty, `0.0.0.0`, loopback, and
+ * non-IP values are rejected so browser-triggered proxy routes cannot be abused
+ * to call local services on the Pi or arbitrary hostnames.
+ */
 function nodeBaseUrl(node: NodeRecord) {
   if (!node.ip || isIP(node.ip) !== 4 || node.ip === "0.0.0.0" || node.ip.startsWith("127.")) {
     throw new Error(`node IP is unavailable or invalid: ${node.ip || "empty"}`);
@@ -195,6 +268,14 @@ function nodeBaseUrl(node: NodeRecord) {
   return `http://${node.ip}`;
 }
 
+/**
+ * Proxies a JSON request to a selected ESP32 node and normalizes the response.
+ *
+ * This is the shared transport for node status/config/calibration/identify
+ * routes. It adds JSON headers, applies a short timeout so the web UI remains
+ * responsive when a node is offline, and converts network failures into a 502
+ * payload the browser can display.
+ */
 async function fetchNodeJson(deviceId: number, apiPath: string, init: RequestInit = {}) {
   const node = findNodeByDeviceId(deviceId);
   if (!node) {
@@ -232,11 +313,22 @@ async function fetchNodeJson(deviceId: number, apiPath: string, init: RequestIni
   }
 }
 
+/**
+ * Constructs the Fastify application and registers all HTTP routes.
+ *
+ * The function is exported for tests and tools, while `main()` below handles the
+ * normal command-line startup. Route groups are organized by purpose: PWA shell
+ * assets, health/version, worker status/history, push, admin state, ESP32 node
+ * proxying, and lifecycle hooks.
+ */
 export function buildServer() {
   const server = Fastify({
     logger: true
   });
 
+  // PWA shell routes. These are served with no-store headers because installed
+  // PWAs and service workers need to discover version changes promptly. Static
+  // files that are safe to cache are still served later through fastifyStatic.
   server.get("/", async (_request, reply) => {
     reply.type("text/html; charset=utf-8").header("Cache-Control", "no-store");
     return renderVersionedAsset("index.html");
@@ -262,6 +354,9 @@ export function buildServer() {
     return `window.ALARM_APP_CONFIG = ${JSON.stringify({ version: appConfig.version, build: appConfig.build })};`;
   });
 
+  // Lightweight service probes. /api/healthz is for process supervision; the
+  // richer /api/version response is used by browsers to decide whether a cached
+  // PWA payload is stale and should be refreshed.
   server.get("/api/healthz", async () => ({
     ok: true,
     service: "esp32-alarm-pwa",
@@ -275,6 +370,8 @@ export function buildServer() {
     notes: "Persistent admin, VAPID, and PWA update enforcement"
   }));
 
+  // Live system status. Prefer the short-lived worker cache when it is fresh;
+  // otherwise poll the Python worker and let that poll update node/history state.
   server.get("/api/status", async (_request, reply) => {
     const status = Date.now() - lastWorkerStatusAt < 2500 && lastWorkerStatus ? lastWorkerStatus : await fetchAndProcessWorkerStatus();
     if (status?.ok === false) {
@@ -284,6 +381,8 @@ export function buildServer() {
     return status;
   });
 
+  // Movement history and alert threshold configuration. These endpoints power
+  // the aggregate chart, per-node charts, and Pi-side trigger line in the PWA.
   server.get<{ Querystring: { fromHours?: string; toHours?: string } }>("/api/history/movement", async (request) => {
     const fromHours = Number(request.query.fromHours ?? "6");
     const toHours = Number(request.query.toHours ?? "0");
@@ -306,6 +405,8 @@ export function buildServer() {
     return { ok: true, trigger: db.getMovementTriggerSettings() };
   });
 
+  // Browser push endpoints. VAPID public key is safe to expose; subscriptions
+  // are stored server-side so later movement events can wake installed PWAs.
   server.get("/api/push/vapid-public-key", async () => ({
     configured: db.getVapidSettings().publicKey.length > 0,
     publicKey: db.getVapidSettings().publicKey
@@ -326,6 +427,8 @@ export function buildServer() {
     return { ok: true };
   });
 
+  // Remove the exact browser endpoint supplied by the client. This mirrors the
+  // Push API subscription object and avoids guessing which device is unsubscribing.
   server.post<{ Body: { endpoint?: string } }>("/api/push/unsubscribe", async (request, reply) => {
     if (!request.body?.endpoint) {
       reply.code(400);
@@ -335,6 +438,8 @@ export function buildServer() {
     return { ok: true };
   });
 
+  // Manual push test used during setup. It creates an event record first so the
+  // notification deep link points at a real event/history context.
   server.post<{ Body: { title?: string; body?: string; severity?: string } }>("/api/push/test", async (request) => {
     const eventId = db.createEvent({
       type: "push_test",
@@ -354,6 +459,9 @@ export function buildServer() {
     return { ok: true, eventId, ...result };
   });
 
+  // Single admin bootstrap payload. The front end can refresh one endpoint and
+  // repaint users, VAPID status, subscriptions, nodes, security flags, events,
+  // and audit records without coordinating multiple independent requests.
   server.get("/api/admin/summary", async () => ({
     users: db.listUsers(),
     vapid: db.getVapidSettings({ includePrivateKey: true }),
@@ -364,6 +472,9 @@ export function buildServer() {
     auditLog: db.auditLog(25)
   }));
 
+  // ESP32 node proxy routes. The browser talks to the Pi, and the Pi talks to
+  // the node over LAN. This avoids CORS issues and centralizes timeout/error
+  // handling for nodes that are offline or changing IP address.
   server.get<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/status", async (request, reply) => {
     const result = await fetchNodeJson(Number(request.params.deviceId), "/status.json");
     reply.code(result.status);
@@ -424,6 +535,8 @@ export function buildServer() {
     return result.body;
   });
 
+  // User administration. These are currently local admin records; future login
+  // enforcement can build on the same role and state fields.
   server.post<{ Body: { username?: string; displayName?: string; role?: string; state?: string } }>(
     "/api/admin/users",
     async (request, reply) => {
@@ -464,6 +577,8 @@ export function buildServer() {
     return { ok: true };
   });
 
+  // VAPID administration. Keys can either be pasted from another generator or
+  // generated locally; saving keys immediately enables later push sends.
   server.post<{ Body: { publicKey?: string; privateKey?: string; subject?: string } }>(
     "/api/admin/vapid",
     async (request, reply) => {
@@ -490,6 +605,9 @@ export function buildServer() {
     return { ok: true, vapid: db.getVapidSettings({ includePrivateKey: true }) };
   });
 
+  // Persistent node registry controls. These settings are Pi-side metadata used
+  // by dashboards and trigger decisions; live ESP32 telemetry updates IP/payload
+  // but no longer overwrites a user-edited display name.
   server.put<{ Params: { id: string }; Body: { name?: string; expected?: boolean; active?: boolean } }>(
     "/api/admin/nodes/:id",
     async (request, reply) => {
@@ -525,21 +643,31 @@ export function buildServer() {
     return { ok: true };
   });
 
+  // Security flags are stored before full auth enforcement exists so the UI and
+  // audit trail can track intended deployment posture.
   server.post<{ Body: SecuritySettings }>("/api/admin/security", async (request) => {
     db.saveSecuritySettings(request.body);
     return { ok: true, security: db.getSecuritySettings() };
   });
 
+  // On-demand SQLite backup. The database layer chooses the exact checkpoint and
+  // copy behavior so this route only needs to expose the resulting path.
   server.post("/api/admin/backup", async () => ({
     ok: true,
     path: db.backup(appConfig.backupDir)
   }));
 
+  // Static file fallback for cacheable assets such as app.js, CSS, icons, and
+  // images. Version-sensitive shell files above are registered first, so those
+  // custom handlers win before this generic static plugin.
   server.register(fastifyStatic, {
     root: publicDir,
     prefix: "/"
   });
 
+  // Background worker poll. This keeps node records/history fresh even when no
+  // browser is actively asking for /api/status, and it also drives movement
+  // trigger push notifications. The timer is cleared when Fastify shuts down.
   let workerPollTimer: NodeJS.Timeout | undefined;
   server.addHook("onReady", async () => {
     workerPollTimer = setInterval(() => {
@@ -555,11 +683,19 @@ export function buildServer() {
   return server;
 }
 
+/**
+ * Starts the HTTP server for normal production/development execution.
+ *
+ * Keeping this separate from `buildServer()` lets tests import and exercise the
+ * configured Fastify app without binding a port.
+ */
 async function main() {
   const server = buildServer();
   await server.listen({ host: appConfig.host, port: appConfig.port });
 }
 
+// Only listen when this file is run directly. Importing `buildServer()` from a
+// future test harness or management command should not start a network listener.
 if (require.main === module) {
   main().catch((error) => {
     console.error(error);
