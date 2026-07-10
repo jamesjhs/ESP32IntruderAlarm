@@ -1,6 +1,6 @@
 # PWA And Android Push Requirements Assessment
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 ## Scope
 
@@ -33,8 +33,8 @@ TaskIt provides a useful baseline:
 | Maskable icons | Complete | `maskable-icon-192x192.png` and `maskable-icon-512x512.png` exist. |
 | Notification badges | Complete | Monochrome-friendly `72`, `96`, and `128` badges exist. |
 | Favicon and Apple icon | Complete | `favicon.png` and `apple-touch-icon.png` exist. |
-| Versioned asset URLs | Complete | Manifest, icons, CSS, service worker registration, and cached assets use `v=0.2.1`. |
-| Cache versioning | Complete | Cache name is `esp32-alarm-0.2.1`; activation removes old caches. |
+| Versioned asset URLs | Complete | Manifest, icons, CSS, service worker registration, and cached assets use the value served from `raspberrypi/VERSION`. |
+| Cache versioning | Complete | Cache name is `esp32-alarm-<version>`; activation removes old caches. |
 | API caching strategy | Complete | `/api/*` requests are network-first and return JSON `503` when unavailable. |
 | Navigation strategy | Complete | Navigations are network-first with cached shell fallback. |
 | Push event display | Complete | Service worker displays self-contained alarm/status payloads. |

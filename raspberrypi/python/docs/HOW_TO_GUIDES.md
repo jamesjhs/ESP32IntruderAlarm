@@ -1,6 +1,6 @@
 # Python Worker How-To Guides
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 ## How To Start The Worker
 
@@ -28,3 +28,9 @@ Restart the worker.
 ```powershell
 Invoke-RestMethod http://127.0.0.1:3005/internal/status
 ```
+
+Receiver and sender ESP32 devices both appear in this response after they have
+posted telemetry to `/espdata`. Sender entries identify themselves with `role:
+"csi_sender"` and carry operational fields such as `enabled`, `packet_rate_hz`,
+`sta_mac`, and `broadcast_ip`; receiver entries carry movement and CSI health
+fields such as `movement_score`, `sample_rate_hz`, and `rssi`.

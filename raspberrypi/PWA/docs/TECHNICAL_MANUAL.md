@@ -1,6 +1,6 @@
 # PWA Technical Manual
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 ## Responsibilities
 
@@ -11,18 +11,29 @@ The TypeScript service owns the public application surface:
 - status API that reads the Python worker over loopback
 - Cloudflare Access-aware response handling
 - persistent admin data, node registry, VAPID push, movement events, and audit logs
-- ESP32 node proxy routes for status, configuration, and persisted calibration
+- ESP32 node proxy routes for receiver status, configuration, persisted
+  calibration, and sender status/configuration/start-stop control
 
 ## Runtime
 
 The service binds to `127.0.0.1:3015` by default. Cloudflare Tunnel should route
 `house.jahosi.co.uk` to this loopback address.
 
-The ESP32 telemetry endpoint is not part of this service. ESP32 devices should
-post directly to the Python worker on LAN port `3005` at `/espdata`. The PWA
-service does proxy selected ESP32 node actions, including `/api/config`,
-`/api/calibrate`, and `/api/calibration`, so the browser does not need direct
-node access.
+The ESP32 telemetry endpoint is not part of this service. ESP32 receiver and
+sender devices should post directly to the Python worker on LAN port `3005` at
+`/espdata`. The PWA service proxies selected ESP32 node actions, including
+receiver `/api/config`, `/api/calibrate`, and `/api/calibration` calls plus
+sender `/api/config`, `/api/start`, and `/api/stop` behaviour through the same
+registered-node route shape. This keeps the browser talking to the Pi rather
+than requiring direct node access.
+
+In the controlled-source CSI topology, sender telemetry carries `role:
+"csi_sender"` and the sender station MAC. The client uses that role to label
+the node as a packet sender, show Start/Stop Sender and packet-rate settings,
+and hide receiver-only calibration controls. Receiver settings include
+`csi_source_mac` and `csi_source_filter_enabled`, which tell the receiver
+firmware to analyse CSI frames from the known sender instead of mixed household
+traffic.
 
 ## API Design
 

@@ -1,6 +1,6 @@
 # Raspberry Pi How-To Guides
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 ## How To Configure First Install
 
@@ -75,6 +75,19 @@ Then open:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:3005/internal/status
 ```
+
+## How To Set Up The Dedicated CSI Sender
+
+Flash `firmware/esp32-csi-sender` to the third ESP32, provision it onto the
+same 2.4 GHz Wi-Fi network as the receiver nodes, then set its Pi target to
+`http://<pi-lan-ip>:3005/espdata`. Once the sender appears in the PWA ESP32
+Nodes card, use its Settings panel or local IP page to choose packet rate, UDP
+port, payload size, broadcast IP, and enabled state.
+
+Copy the sender `sta_mac` value into each receiver's `CSI sender MAC` field,
+enable `Filter to sender`, start the sender, and then run stillness calibration
+on the receivers while the sender is already running at the intended packet
+rate.
 
 ## How To Point Cloudflare Tunnel
 

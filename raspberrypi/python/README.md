@@ -1,11 +1,16 @@
 # Python ESP32 Telemetry Worker
 
-Version: `0.2.1`
+Version: `0.4.0`
 
-The Python worker receives compact telemetry from ESP32 CSI nodes on LAN port
-`3005` at `/espdata`. It keeps live node state in memory, exposes internal
-status endpoints for the TypeScript PWA service, and can send optional UDP probe
-traffic on a timer.
+The Python worker receives compact telemetry from ESP32 CSI receiver and sender
+nodes on LAN port `3005` at `/espdata`. It keeps live node state in memory,
+exposes internal status endpoints for the TypeScript PWA service, and can send
+optional UDP probe traffic on a timer.
+
+In the controlled-source topology, the dedicated sender posts the same telemetry
+shape with `role: "csi_sender"`. The worker stores it like any other node so the
+PWA can proxy configuration requests to the sender, while movement history still
+comes from receiver payloads that report `movement_score`.
 
 ## Install
 

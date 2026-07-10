@@ -1,13 +1,23 @@
 # Python Worker Explanation Manual
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 The Python worker is the local listener for the ESP32 devices.
 
-Each ESP32 sends small JSON messages to the Pi. The worker receives those
-messages, remembers the latest status for each chip, and makes that status
-available to the web dashboard.
+Each ESP32 sends small JSON messages to the Pi. Receiver boards send movement
+and CSI health values, while the dedicated sender board sends its own status,
+including whether it is emitting packets and at what rate. The worker receives
+those messages, remembers the latest status for each chip, and makes that
+status available to the web dashboard.
+
+This means the Python worker does not need to understand every radio detail. It
+acts as the local registry and relay: the PWA asks it which devices are alive,
+then the PWA can use the stored device address to proxy settings back to a
+receiver or to the sender. Movement history still comes from the receiver
+payloads; the sender exists to provide a steadier Wi-Fi signal source for those
+receivers to analyse.
 
 The worker can also send small UDP packets on a timer. Those packets can help
-keep Wi-Fi traffic predictable for CSI sensing, but they should be used gently
-because network traffic itself affects the measurement.
+keep Wi-Fi traffic predictable for CSI sensing, but the dedicated ESP32 sender
+is the cleaner controlled-source approach because receiver firmware can filter
+CSI to the sender's known MAC address.

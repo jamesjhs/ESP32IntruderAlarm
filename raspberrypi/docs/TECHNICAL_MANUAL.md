@@ -1,6 +1,6 @@
 # Raspberry Pi Technical Manual
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 ## Architecture
 
@@ -13,19 +13,26 @@ The TypeScript PWA service owns browser-facing concerns:
 - Cloudflare Access-aware session handling
 - persistent admin records, VAPID settings, push subscriptions, events, nodes,
   movement trigger settings, and audit log tables
-- ESP32 node proxy APIs for status, configuration, calibration, and calibration
-  deletion
+- ESP32 node proxy APIs for receiver status/configuration/calibration and sender
+  status/configuration/start-stop control
 
 The Python worker owns LAN sensor concerns:
 
 - `POST /espdata` ESP32 telemetry ingest
 - in-memory live node state
+- receiver and sender role relay for the PWA
 - sparse health and diagnostics APIs
 - UDP probe traffic timer
 - compact telemetry relay for the PWA status and history pipeline
 
 The services communicate over loopback. The PWA service reads worker status from
 `http://127.0.0.1:3005/internal/status`.
+
+The controlled-source topology uses the same LAN telemetry path for both
+receiver and sender ESP32 devices. Sender telemetry includes `role:
+"csi_sender"` and its station MAC. Receiver configuration can then enable
+`csi_source_filter_enabled` and set `csi_source_mac` so CSI scoring only uses
+frames from that known packet source.
 
 ## Ports
 

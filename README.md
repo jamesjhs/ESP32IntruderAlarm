@@ -6,12 +6,12 @@ The long-term goal is to place three ESP32 sensing nodes around a house and conn
 
 ## Current Version
 
-Current prototype version: `0.2.1`.
+Current prototype version: `0.4.0`.
 
-`0.2.1` is the first version where ESP32 stillness calibration is explicitly
-power-loss safe. A completed calibration is saved to ESP32 NVS, loaded before
-movement scoring after reboot, and exposed for inspection or manual repair from
-both the ESP32 local dashboard and the Raspberry Pi PWA node settings modal.
+`0.4.0` adds a managed dedicated ESP32 CSI sender, lets receiver nodes filter
+CSI frames to that sender's source MAC, and exposes sender start/stop plus
+packet-rate tuning both on the sender's own page and through the Raspberry Pi
+PWA.
 
 Recent implementation timeline:
 
@@ -22,6 +22,12 @@ Recent implementation timeline:
 - `0.2.1`: Persistent ESP32 calibration baselines in NVS, calibration
   read/write/delete APIs, Pi proxy routes for calibration, editable calibration
   panels on both dashboards, and fixed high-DPI mobile chart sizing.
+- `0.3.0`: Shared Pi version source in `raspberrypi/VERSION`, no `.env` version
+  override, generated Python package metadata removed from source control, and
+  movement history capped to 24 hours with a 30-minute default view.
+- `0.4.0`: Dedicated `esp32-csi-sender` firmware, Pi-managed sender
+  start/stop/configuration, receiver-side sender MAC filtering, and updated
+  topology documentation for the controlled-packet CSI mode.
 
 ## Why CSI?
 
@@ -44,6 +50,7 @@ This is feasible, but it should be treated as a research/prototyping project rat
 | Detecting still presence | Harder | CSI is strongest for motion. Static occupancy may need longer observation windows, breathing-level sensitivity, better placement, or machine learning. |
 | One ESP32 plus router | Good first prototype | A single station can collect CSI from router traffic/beacons, but packet rate and router behaviour may limit consistency. |
 | Multiple ESP32 nodes | Feasible | Three nodes should improve coverage and reduce blind spots if placed with separated signal paths. |
+| Dedicated ESP32 packet sender | Recommended for repeatability | A third ESP32 can emit a steady 2.4 GHz broadcast stimulus while receiver nodes filter CSI to its source MAC. This gives receivers a more controlled packet source than mixed household/router traffic. |
 | Fewer than three active nodes | Feasible with degraded confidence | The Pi should continue operating with one or two nodes, but reduce coverage, localisation, and alarm confidence accordingly. |
 | Coarse disturbance localisation | Research goal | Strategic placement may allow zone-level or heat-map-style inference, but true volumetric mapping is significantly harder than detecting movement. |
 | Pi-side learning/training | Feasible if staged | Heuristics, calibration, and small models are realistic on a Raspberry Pi; continuous raw CSI streaming and heavy model training should be avoided or treated as short capture sessions. |
@@ -78,14 +85,20 @@ Raspberry Pi services
         v
 Home 2.4/5 GHz router / LAN
         |
-        +-- ESP32 node 0: CSI capture + local JSON API
-        +-- ESP32 node 1: CSI capture + local JSON API
-        +-- ESP32 node 2: CSI capture + local JSON API
+        +-- ESP32 receiver node 0: CSI capture + local JSON API
+        +-- ESP32 receiver node 1: CSI capture + local JSON API
+        +-- ESP32 sender node: managed 2.4 GHz packet source
 ```
 
 The first firmware target should be an ESP-IDF application rather than Arduino-only code, because the CSI APIs and Espressif reference material are centred around ESP-IDF.
 
 The home router is the first "illuminator" for the sensing field: normal 2.4 GHz traffic, beacons, and management frames provide a baseline signal path that ESP32 nodes can observe. ESP32 CSI support is mainly a 2.4 GHz capability, so the nodes should be treated as 2.4 GHz sensors even if the home router also serves a 5 GHz SSID. If passive router traffic proves too sparse or inconsistent, the next step is controlled probe traffic rather than assuming the router alone will provide a stable sensing rate.
+
+For controlled CSI experiments, `firmware/esp32-csi-sender` turns the third ESP32
+into that probe source. It joins the same 2.4 GHz network for Pi management, then
+emits steady UDP broadcast frames that receiver nodes can hear directly and
+filter by source MAC. The sender is not a clock synchronizer; it is a stable,
+known packet source that makes the receiver-side CSI experiment more repeatable.
 
 ## Project Goals
 
@@ -472,7 +485,7 @@ Candidate update JSON:
 
 ```json
 {
-  "version": "0.2.1",
+  "version": "<VERSION>",
   "build": "2026-07-08T12:00:00Z",
   "mandatory": false,
   "notes": "PWA shell and push handling update"

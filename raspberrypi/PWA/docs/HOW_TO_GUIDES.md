@@ -1,6 +1,6 @@
 # PWA How-To Guides
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 ## How To Check The Version API
 
@@ -23,6 +23,20 @@ Replace `0` with the ESP32 `device_id`:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:3015/api/nodes/0/calibration
 ```
+
+## How To Configure The Dedicated CSI Sender Through The PWA
+
+Provision the sender ESP32 onto the same 2.4 GHz Wi-Fi network as the receiver
+ESP32 boards and let it post telemetry to the Python worker at
+`http://<pi-lan-ip>:3005/espdata`. Once it appears in the ESP32 Nodes card, open
+Settings for that sender and set the packet rate, UDP port, payload size,
+broadcast address, and Pi telemetry target. Use Start/Stop Sender from the node
+card to enable or pause packet emission without removing the device from Wi-Fi.
+
+For each receiver ESP32, open Settings, copy the sender `sta_mac` into `CSI
+sender MAC`, and enable `Filter to sender`. Calibrate the receivers while the
+sender is already running at the intended rate so the baseline includes the
+normal controlled packet stream.
 
 ## How To Build For Production
 

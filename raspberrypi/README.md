@@ -1,6 +1,6 @@
 # Raspberry Pi Server
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 This directory contains the Raspberry Pi side of ESP32IntruderAlarm.
 
@@ -16,12 +16,17 @@ Cloudflare Access/App Login
   -> Cloudflare Tunnel
   -> TypeScript PWA service: http://127.0.0.1:3015
 
-ESP32 nodes on LAN
+ESP32 receiver and sender nodes on LAN
   -> Python worker: http://<pi-lan-ip>:3005/espdata
 ```
 
 Cloudflare should expose only the PWA service. The ESP32 telemetry receiver is
 LAN-only and should not be routed through Cloudflare.
+
+In `0.4.0`, the Pi also manages a dedicated ESP32 CSI sender. The sender joins
+the same 2.4 GHz network as the receiver nodes, posts telemetry to the same
+Python worker endpoint with `role: "csi_sender"`, and can be started, stopped,
+or tuned from the PWA through the existing node proxy path.
 
 ## Quick Start
 

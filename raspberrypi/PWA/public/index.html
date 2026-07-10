@@ -8,10 +8,10 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="ESP32 Alarm">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="manifest" href="/manifest.webmanifest?v=0.2.1" crossorigin="use-credentials">
-    <link rel="icon" type="image/png" href="/favicon.png?v=0.2.1">
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=0.2.1">
-    <link rel="stylesheet" href="/styles.css?v=0.2.1">
+    <link rel="manifest" href="/manifest.webmanifest?v=dev" crossorigin="use-credentials">
+    <link rel="icon" type="image/png" href="/favicon.png?v=dev">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=dev">
+    <link rel="stylesheet" href="/styles.css?v=dev">
     <title>ESP32 Intruder Alarm</title>
   </head>
   <body>
@@ -55,6 +55,13 @@
               <label>Pi IP <input name="pi_ip" autocomplete="off"></label>
               <label>Pi port <input name="pi_port" type="number" min="1" max="65535"></label>
               <label>Pi API path <input name="pi_api_path" autocomplete="off"></label>
+              <label>CSI sender MAC <input name="csi_source_mac" autocomplete="off" placeholder="AA:BB:CC:DD:EE:FF"></label>
+              <label>Filter to sender <input name="csi_source_filter_enabled" type="checkbox"></label>
+              <label>Sender enabled <input name="enabled" type="checkbox"></label>
+              <label>Sender packet Hz <input name="packet_rate_hz" type="number" min="1" max="200" step="1"></label>
+              <label>Sender UDP port <input name="udp_port" type="number" min="1" max="65535" step="1"></label>
+              <label>Sender payload bytes <input name="payload_size" type="number" min="16" max="512" step="1"></label>
+              <label>Sender broadcast IP <input name="broadcast_ip" autocomplete="off" placeholder="255.255.255.255"></label>
               <label>Post interval seconds <input name="pi_post_interval_s" type="number" min="1" max="30" step="1"></label>
               <label>Idle Hz <input name="idle_rate_hz" type="number" min="10" max="100"></label>
               <label>Boost Hz <input name="boost_rate_hz" type="number" min="10" max="250"></label>
@@ -96,7 +103,7 @@
           <p class="eyebrow">Raspberry Pi alarm server</p>
           <h1>ESP32 Intruder Alarm</h1>
         </div>
-        <span id="version" class="badge">0.2.1</span>
+        <span id="version" class="badge">dev</span>
       </section>
 
       <details id="movement-history" class="panel collapsible movement-history" open>
@@ -106,14 +113,14 @@
             <p id="history-range-label" class="message">Showing recent movement scores.</p>
           </div>
           <div class="history-controls">
-            <label>From <output id="history-from-label">6h</output></label>
+            <label>From <output id="history-from-label">30m</output></label>
             <label>To <output id="history-to-label">0h</output></label>
           </div>
         </div>
 
         <div class="range-shell">
-          <input id="history-from-hours" type="range" min="0" max="6" step="0.25" value="6">
-          <input id="history-to-hours" type="range" min="0" max="6" step="0.25" value="0">
+          <input id="history-from-hours" type="range" min="0" max="24" step="0.25" value="0.5">
+          <input id="history-to-hours" type="range" min="0" max="24" step="0.25" value="0">
         </div>
 
         <div class="trigger-control">
@@ -125,6 +132,14 @@
         <article class="chart-card">
           <h3>Amalgamated Score</h3>
           <canvas id="aggregate-chart" height="180"></canvas>
+        </article>
+        <article class="chart-card">
+          <div class="chart-title-row">
+            <h3>Sensor Trend Comparison</h3>
+            <span id="comparison-score" class="badge compact">n/a</span>
+          </div>
+          <canvas id="comparison-chart" height="190"></canvas>
+          <div id="comparison-legend" class="chart-legend"></div>
         </article>
         <div id="node-charts" class="node-charts"></div>
       </details>

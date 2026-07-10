@@ -1,6 +1,6 @@
 # ESP32 CSI Node
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 Standalone ESP-IDF firmware for an ESP32 Wi-Fi CSI movement sensor node.
 
@@ -15,13 +15,11 @@ configuration.
 
 ## Current Release Notes
 
-`0.2.1` persists stillness calibration baselines to ESP32 NVS. A calibrated node
-now reloads its baseline after reboot or power loss instead of needing an
-automatic recalibration. The local ESP32 dashboard and the Pi PWA can both read,
-edit, save, and delete the persisted calibration values through
-`/api/calibration`. When no valid calibration is present, the node continues to
-report CSI sample health but suppresses movement scoring until calibration is
-explicitly run or saved.
+`0.4.0` adds controlled-source CSI support. Receiver nodes can be configured
+with the dedicated sender's station MAC and can ignore CSI frames from other
+sources, making movement scoring less dependent on mixed household/router
+traffic. These settings are available from the Pi PWA and the receiver
+`/api/config` endpoint.
 
 ## Build and Flash
 
@@ -177,6 +175,8 @@ Example config update:
   "pi_ip": "192.168.1.10",
   "pi_port": 3005,
   "pi_api_path": "/espdata",
+  "csi_source_mac": "AA:BB:CC:DD:EE:FF",
+  "csi_source_filter_enabled": true,
   "pi_post_interval_ms": 5000,
   "idle_rate_hz": 10,
   "boost_rate_hz": 80,
@@ -195,6 +195,8 @@ The firmware clamps values before storing them:
 - `pi_ip`: empty or valid IPv4 address
 - `pi_port`: 1-65535, default 3005
 - `pi_api_path`: receiving API path, default `/espdata`
+- `csi_source_mac`: empty or a dedicated sender MAC such as `AA:BB:CC:DD:EE:FF`
+- `csi_source_filter_enabled`: true to ignore CSI frames from other sources
 - `pi_post_interval_ms`: 1000-30000 ms
 - `idle_rate_hz`: 10-100 Hz
 - `boost_rate_hz`: 10-250 Hz
@@ -237,6 +239,8 @@ callback queue fast enough.
 The firmware now uses a more robust CSI movement pipeline than a raw amplitude
 threshold:
 
+- Can optionally filter CSI to a dedicated sender MAC so movement scoring uses a
+  controlled packet source instead of mixed household traffic.
 - Skips invalid first CSI bytes when ESP-IDF marks them invalid.
 - Computes per-subcarrier power using `I^2 + Q^2`.
 - Rejects malformed, too-short, or poor-SNR CSI samples.

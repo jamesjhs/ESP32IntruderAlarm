@@ -14,14 +14,14 @@
  *   window when possible.
  *
  * Interactions:
- * - `src/server.ts` rewrites APP_VERSION at request time when APP_VERSION is
- *   supplied through environment configuration.
+ * - `src/server.ts` rewrites APP_VERSION at request time from
+ *   `raspberrypi/VERSION`.
  * - `public/app.js` registers this worker, asks it to skip waiting during
  *   updates, and listens for `PUSH_SUBSCRIPTION_CHANGED` messages.
  * - `manifest.webmanifest` and the icon files share the same version query
  *   string so browser caches move together when the app version changes.
  */
-const APP_VERSION = "0.2.1";
+const APP_VERSION = "dev";
 const CACHE_NAME = `esp32-alarm-${APP_VERSION}`;
 const ASSET_VERSION = `?v=${APP_VERSION}`;
 
@@ -72,7 +72,7 @@ self.addEventListener("install", (event) => {
 });
 
 // Delete old versioned caches and claim open clients. This is the mechanism that
-// makes a 0.2.1 -> future-version update shed the previous app shell promptly.
+// makes each future version update shed the previous app shell promptly.
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches

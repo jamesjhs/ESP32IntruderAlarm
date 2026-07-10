@@ -95,6 +95,8 @@ typedef struct {
     char pi_ip[16];
     uint16_t pi_port;
     char pi_api_path[64];
+    char csi_source_mac[18];
+    bool csi_source_filter_enabled;
     uint32_t pi_post_interval_ms;
     uint16_t idle_rate_hz;
     uint16_t boost_rate_hz;
@@ -123,6 +125,7 @@ typedef struct {
     uint32_t packet_count;
     uint32_t last_window_packets;
     uint32_t rejected_samples;
+    uint32_t source_filtered_samples;
     uint32_t filtered_samples;
     uint32_t throttled_samples;
     uint32_t queue_drops;
@@ -170,10 +173,13 @@ static bool auto_name_started;
 static volatile int64_t csi_min_interval_us = 333333;
 static volatile int64_t csi_last_sample_us;
 static volatile uint32_t csi_rejected_samples;
+static volatile uint32_t csi_source_filtered_samples;
 static volatile uint32_t csi_filtered_samples;
 static volatile uint32_t csi_throttled_samples;
 static volatile uint32_t csi_queue_drops;
 static volatile uint32_t csi_accepted_samples;
+static volatile bool csi_source_filter_enabled;
+static uint8_t csi_source_mac[6];
 static volatile bool calibration_requested;
 static volatile bool calibration_delete_requested;
 static volatile bool calibration_apply_requested;
@@ -231,6 +237,8 @@ static void install_log_capture(void)
 {
     original_log_vprintf = esp_log_set_vprintf(captured_log_vprintf);
 }
+
+static bool parse_mac(const char *value, uint8_t out[6]);
 
 /**
  * Introduction:
@@ -408,10 +416,60 @@ static void apply_configured_sample_rate_locked(void)
     csi_min_interval_us = target_rate > 0 ? 1000000LL / target_rate : 0;
 }
 
+static void apply_csi_source_filter_locked(void)
+{
+    uint8_t parsed[6] = {0};
+    if (g_config.csi_source_filter_enabled && parse_mac(g_config.csi_source_mac, parsed)) {
+        memcpy(csi_source_mac, parsed, sizeof(csi_source_mac));
+        csi_source_filter_enabled = true;
+    } else {
+        memset(csi_source_mac, 0, sizeof(csi_source_mac));
+        csi_source_filter_enabled = false;
+    }
+}
+
 static bool valid_ipv4_or_empty(const char *value)
 {
     struct in_addr parsed;
     return value == NULL || value[0] == '\0' || inet_pton(AF_INET, value, &parsed) == 1;
+}
+
+static bool parse_mac(const char *value, uint8_t out[6])
+{
+    if (value == NULL || value[0] == '\0') {
+        return false;
+    }
+    unsigned int bytes[6];
+    if (sscanf(value, "%02x:%02x:%02x:%02x:%02x:%02x", &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4], &bytes[5]) != 6) {
+        return false;
+    }
+    for (size_t i = 0; i < 6; i++) {
+        if (bytes[i] > 0xffU) {
+            return false;
+        }
+        out[i] = (uint8_t)bytes[i];
+    }
+    return true;
+}
+
+static bool valid_mac_or_empty(const char *value)
+{
+    uint8_t parsed[6];
+    return value == NULL || value[0] == '\0' || parse_mac(value, parsed);
+}
+
+static void normalize_mac_text(char *value, size_t value_len)
+{
+    uint8_t parsed[6];
+    if (value == NULL || value_len == 0) {
+        return;
+    }
+    value[value_len - 1] = '\0';
+    if (!parse_mac(value, parsed)) {
+        value[0] = '\0';
+        return;
+    }
+    snprintf(value, value_len, "%02X:%02X:%02X:%02X:%02X:%02X", parsed[0], parsed[1], parsed[2], parsed[3], parsed[4], parsed[5]);
 }
 
 static void sanitize_api_path(char *path, size_t path_len)
@@ -496,6 +554,8 @@ static void default_config(node_config_t *cfg)
     cfg->pi_ip[0] = '\0';
     cfg->pi_port = DEFAULT_PI_PORT;
     strlcpy(cfg->pi_api_path, DEFAULT_PI_API_PATH, sizeof(cfg->pi_api_path));
+    cfg->csi_source_mac[0] = '\0';
+    cfg->csi_source_filter_enabled = false;
     cfg->pi_post_interval_ms = 5000;
     cfg->idle_rate_hz = 10;
     cfg->boost_rate_hz = 80;
@@ -548,6 +608,12 @@ static void sanitize_config(node_config_t *cfg)
     if (!valid_ipv4_or_empty(cfg->pi_ip)) {
         cfg->pi_ip[0] = '\0';
     }
+    if (!valid_mac_or_empty(cfg->csi_source_mac)) {
+        cfg->csi_source_mac[0] = '\0';
+        cfg->csi_source_filter_enabled = false;
+    } else if (cfg->csi_source_mac[0] != '\0') {
+        normalize_mac_text(cfg->csi_source_mac, sizeof(cfg->csi_source_mac));
+    }
     if (cfg->pi_port == 0) {
         cfg->pi_port = DEFAULT_PI_PORT;
     }
@@ -581,11 +647,16 @@ static esp_err_t load_config(node_config_t *cfg)
     size_t name_len = sizeof(cfg->name);
     size_t pi_ip_len = sizeof(cfg->pi_ip);
     size_t pi_api_path_len = sizeof(cfg->pi_api_path);
+    size_t csi_source_mac_len = sizeof(cfg->csi_source_mac);
     nvs_get_i32(nvs, "device_id", &cfg->device_id);
     nvs_get_str(nvs, "name", cfg->name, &name_len);
     nvs_get_str(nvs, "pi_ip", cfg->pi_ip, &pi_ip_len);
     nvs_get_u16(nvs, "pi_port", &cfg->pi_port);
     nvs_get_str(nvs, "pi_path", cfg->pi_api_path, &pi_api_path_len);
+    nvs_get_str(nvs, "src_mac", cfg->csi_source_mac, &csi_source_mac_len);
+    uint8_t src_filter = 0;
+    nvs_get_u8(nvs, "src_filter", &src_filter);
+    cfg->csi_source_filter_enabled = src_filter != 0;
     nvs_get_u32(nvs, "pi_post_ms", &cfg->pi_post_interval_ms);
     nvs_get_u16(nvs, "idle_hz", &cfg->idle_rate_hz);
     nvs_get_u16(nvs, "boost_hz", &cfg->boost_rate_hz);
@@ -630,6 +701,8 @@ static esp_err_t save_config(const node_config_t *cfg)
         (err = nvs_set_str(nvs, "pi_ip", cfg->pi_ip)) != ESP_OK ||
         (err = nvs_set_u16(nvs, "pi_port", cfg->pi_port)) != ESP_OK ||
         (err = nvs_set_str(nvs, "pi_path", cfg->pi_api_path)) != ESP_OK ||
+        (err = nvs_set_str(nvs, "src_mac", cfg->csi_source_mac)) != ESP_OK ||
+        (err = nvs_set_u8(nvs, "src_filter", cfg->csi_source_filter_enabled ? 1 : 0)) != ESP_OK ||
         (err = nvs_set_u32(nvs, "pi_post_ms", cfg->pi_post_interval_ms)) != ESP_OK ||
         (err = nvs_set_u16(nvs, "idle_hz", cfg->idle_rate_hz)) != ESP_OK ||
         (err = nvs_set_u16(nvs, "boost_hz", cfg->boost_rate_hz)) != ESP_OK ||
@@ -1038,6 +1111,11 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     (void)ctx;
     if (info == NULL || info->buf == NULL || info->len == 0) {
         csi_rejected_samples++;
+        return;
+    }
+
+    if (csi_source_filter_enabled && memcmp(info->mac, csi_source_mac, sizeof(csi_source_mac)) != 0) {
+        csi_source_filtered_samples++;
         return;
     }
 
@@ -1576,6 +1654,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
     g_status.packet_count += window_packets;
     g_status.last_window_packets = window_packets;
     g_status.rejected_samples = csi_rejected_samples;
+    g_status.source_filtered_samples = csi_source_filtered_samples;
     g_status.filtered_samples = csi_filtered_samples;
     g_status.throttled_samples = csi_throttled_samples;
     g_status.queue_drops = csi_queue_drops;
@@ -1665,6 +1744,7 @@ static void csi_aggregation_task(void *arg)
                 g_status.sample_rate_hz = 0;
                 g_status.last_window_packets = 0;
                 g_status.rejected_samples = csi_rejected_samples;
+                g_status.source_filtered_samples = csi_source_filtered_samples;
                 g_status.filtered_samples = csi_filtered_samples;
                 g_status.throttled_samples = csi_throttled_samples;
                 g_status.queue_drops = csi_queue_drops;
@@ -1747,6 +1827,8 @@ static cJSON *status_to_json(void)
     cJSON_AddNumberToObject(root, "trend_score", status.trend_score);
     cJSON_AddNumberToObject(root, "phase_score", status.phase_score);
     cJSON_AddBoolToObject(root, "movement_detected", status.movement_detected);
+    cJSON_AddStringToObject(root, "csi_source_mac", cfg.csi_source_mac);
+    cJSON_AddBoolToObject(root, "csi_source_filter_enabled", cfg.csi_source_filter_enabled);
     cJSON_AddStringToObject(root, "sensing_state", sense_state_name(status.state));
     cJSON_AddNumberToObject(root, "baseline_age_s", status.baseline_age_s);
     cJSON_AddNumberToObject(root, "last_packet_ms", status.last_packet_ms);
@@ -1754,6 +1836,7 @@ static cJSON *status_to_json(void)
     cJSON_AddNumberToObject(root, "packet_count", status.packet_count);
     cJSON_AddNumberToObject(root, "last_window_packets", status.last_window_packets);
     cJSON_AddNumberToObject(root, "rejected_samples", status.rejected_samples);
+    cJSON_AddNumberToObject(root, "source_filtered_samples", status.source_filtered_samples);
     cJSON_AddNumberToObject(root, "filtered_samples", status.filtered_samples);
     cJSON_AddNumberToObject(root, "throttled_samples", status.throttled_samples);
     cJSON_AddNumberToObject(root, "queue_drops", status.queue_drops);
@@ -1898,6 +1981,8 @@ static cJSON *config_to_json(void)
     cJSON_AddStringToObject(root, "pi_ip", cfg.pi_ip);
     cJSON_AddNumberToObject(root, "pi_port", cfg.pi_port);
     cJSON_AddStringToObject(root, "pi_api_path", cfg.pi_api_path);
+    cJSON_AddStringToObject(root, "csi_source_mac", cfg.csi_source_mac);
+    cJSON_AddBoolToObject(root, "csi_source_filter_enabled", cfg.csi_source_filter_enabled);
     char pi_api_url[128];
     snprintf(pi_api_url, sizeof(pi_api_url), "http://%s:%u%s", cfg.pi_ip[0] ? cfg.pi_ip : "{pi-IP-address}",
              (unsigned)cfg.pi_port, cfg.pi_api_path);
@@ -2381,6 +2466,16 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         strlcpy(cfg.pi_api_path, pi_api_path->valuestring, sizeof(cfg.pi_api_path));
     }
 
+    cJSON *csi_source_mac = cJSON_GetObjectItem(root, "csi_source_mac");
+    if (cJSON_IsString(csi_source_mac) && csi_source_mac->valuestring != NULL) {
+        strlcpy(cfg.csi_source_mac, csi_source_mac->valuestring, sizeof(cfg.csi_source_mac));
+    }
+
+    cJSON *csi_source_filter_enabled = cJSON_GetObjectItem(root, "csi_source_filter_enabled");
+    if (cJSON_IsBool(csi_source_filter_enabled)) {
+        cfg.csi_source_filter_enabled = cJSON_IsTrue(csi_source_filter_enabled);
+    }
+
     double value;
     int32_t old_device_id = cfg.device_id;
     value = cfg.device_id;
@@ -2438,6 +2533,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         g_status.state_until_us = esp_timer_get_time() + ((int64_t)g_config.boost_duration_ms * 1000);
     }
     apply_configured_sample_rate_locked();
+    apply_csi_source_filter_locked();
     xSemaphoreGive(state_lock);
     cJSON_Delete(root);
 
@@ -2682,6 +2778,7 @@ void app_main(void)
         ESP_LOGI(TAG, "Persisted CSI calibration loaded from NVS");
     }
     csi_min_interval_us = g_config.idle_rate_hz > 0 ? 1000000LL / g_config.idle_rate_hz : 0;
+    apply_csi_source_filter_locked();
     movement_led_init();
     memset(&g_status, 0, sizeof(g_status));
     g_status.state = SENSE_IDLE;

@@ -243,10 +243,48 @@ h3 {
   background: #ffffff;
 }
 
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.chart-title-row h3 {
+  margin-bottom: 0;
+}
+
+.badge.compact {
+  padding: 5px 8px;
+  font-size: 0.82rem;
+}
+
 .chart-card canvas {
   display: block;
   width: 100%;
   min-height: 160px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 10px;
+  color: #53606f;
+  font-size: 0.88rem;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }
 
 .node-charts {
@@ -369,7 +407,8 @@ dd {
 }
 
 .node-settings-button,
-.node-identify-button {
+.node-identify-button,
+.node-sender-toggle-button {
   white-space: nowrap;
 }
 

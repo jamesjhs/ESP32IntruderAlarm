@@ -1,6 +1,6 @@
 # TypeScript PWA/API Service
 
-Version: `0.2.1`
+Version: `0.4.0`
 
 This app serves the Raspberry Pi web dashboard and browser-facing API on
 `127.0.0.1:3015`. It is the only service intended to sit behind Cloudflare
@@ -8,10 +8,11 @@ Tunnel and Cloudflare Access/App Login.
 
 ## Current Release Notes
 
-`0.2.1` adds Pi-side read/save/delete controls for ESP32 persisted calibration
-baselines, keeps PWA cache/version assets aligned with the app version, and
-retains the movement history, trigger threshold, and push notification plumbing
-introduced during the `0.2.x` dashboard work.
+`0.4.0` adds PWA controls for the dedicated ESP32 CSI sender topology. Sender
+devices appear in the ESP32 Nodes card, can be started or stopped from the Pi,
+and can be configured through the same Settings flow as receiver nodes. Receiver
+settings now include a sender MAC filter so CSI scoring can focus on the known
+packet source.
 
 ## Install
 
@@ -84,6 +85,10 @@ npm start
 | `GET` | `/api/nodes/:deviceId/calibration` | Read the ESP32 persisted calibration baseline. |
 | `POST` | `/api/nodes/:deviceId/calibration` | Save ESP32 calibration baseline values to NVS. |
 | `DELETE` | `/api/nodes/:deviceId/calibration` | Clear the ESP32 persisted calibration baseline. |
+
+Sender nodes use the same status/config proxy routes. The PWA detects them from
+telemetry payloads with `role: "csi_sender"`, shows a Start/Stop Sender button,
+and hides receiver-only calibration actions for those devices.
 
 ## Persistence
 

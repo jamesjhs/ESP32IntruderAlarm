@@ -20,7 +20,7 @@
  * - Receives service-worker messages when browser push subscription state
  *   changes.
  */
-const appConfig = window.ALARM_APP_CONFIG || { version: "0.2.1", build: null };
+const appConfig = window.ALARM_APP_CONFIG || { version: "dev", build: null };
 
 // Static DOM references. The app shell is intentionally server-rendered HTML,
 // with this file attaching behavior and replacing content as API state arrives.
@@ -58,11 +58,17 @@ const triggerLevelEl = document.querySelector("#trigger-level");
 const triggerLevelLabelEl = document.querySelector("#trigger-level-label");
 const triggerEnabledEl = document.querySelector("#trigger-enabled");
 const aggregateChartEl = document.querySelector("#aggregate-chart");
+const comparisonChartEl = document.querySelector("#comparison-chart");
+const comparisonLegendEl = document.querySelector("#comparison-legend");
+const comparisonScoreEl = document.querySelector("#comparison-score");
 const nodeChartsEl = document.querySelector("#node-charts");
 
 // Labels and tooltip text used by renderers. Keeping this copy in one place
 // avoids scattering explanatory text through DOM-construction code.
 const VERSION_KEY = "esp32-alarm:last-seen-version";
+const DEFAULT_HISTORY_HOURS = 0.5;
+const MAX_HISTORY_HOURS = 24;
+const COMPARISON_COLORS = ["#2f6fed", "#d77b1f", "#1f8a5b", "#8b4dc7", "#c43b57", "#007c89"];
 const SECURITY_LABELS = {
   cloudflareAccessExpected: {
     label: "Cloudflare Access expected",
@@ -103,6 +109,9 @@ const NODE_STATUS_HELP = {
   noise_floor: "Radio noise floor reported by the ESP32 Wi-Fi stack.",
   packet_count: "Total CSI packet count seen by the node since boot.",
   last_packet_ms: "Milliseconds since the last accepted packet.",
+  csi_source_mac: "Configured dedicated sender MAC used for CSI source filtering.",
+  csi_source_filter_enabled: "Whether this receiver ignores CSI frames from other source MACs.",
+  source_filtered_samples: "CSI frames ignored because they did not come from the configured sender MAC.",
   calibrating: "Whether the node is currently recording a quiet baseline."
 };
 
@@ -112,6 +121,13 @@ const NODE_CONFIG_HELP = {
   pi_ip: "LAN IP address of the Raspberry Pi telemetry receiver.",
   pi_port: "Port on the Pi worker that accepts ESP32 telemetry posts.",
   pi_api_path: "HTTP path on the Pi worker for telemetry, normally /espdata.",
+  csi_source_mac: "Optional MAC address of the dedicated ESP32 CSI sender. When filtering is enabled, other source MACs are ignored.",
+  csi_source_filter_enabled: "Only score CSI frames from the configured sender MAC.",
+  enabled: "Sender-only: turn steady CSI stimulus packets on or off.",
+  packet_rate_hz: "Sender-only: target UDP broadcast packet cadence.",
+  udp_port: "Sender-only: UDP destination port used by broadcast stimulus packets.",
+  payload_size: "Sender-only: number of bytes in each stimulus packet.",
+  broadcast_ip: "Sender-only: broadcast address for direct over-air packet stimulus.",
   pi_post_interval_s: "How often this ESP32 posts compact telemetry to the Pi.",
   idle_rate_hz: "Low-rate CSI sampling target used during quiet monitoring.",
   boost_rate_hz: "Higher CSI sampling target used while movement evidence is active.",
@@ -149,9 +165,10 @@ let currentAdmin = null;
 let pendingHostVersion = null;
 let lastStatusNodes = [];
 let selectedNodeDeviceId = null;
-let movementHistory = { range: { fromHours: 6, toHours: 0, availableHours: 0 }, samples: [] };
+let selectedNodeRole = "csi_receiver";
+let movementHistory = { range: { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0, availableHours: 0 }, samples: [] };
 let movementTrigger = { threshold: 3, enabled: true };
-let historyWindow = { fromHours: 6, toHours: 0 };
+let historyWindow = { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0 };
 
 /**
  * Converts thrown fetch/API errors into messages that make sense to the user.
@@ -209,6 +226,7 @@ function formatScore(value) {
 function formatHours(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "0h";
+  if (number > 0 && number < 1) return `${Math.round(number * 60)}m`;
   return Number.isInteger(number) ? `${number}h` : `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}h`;
 }
 
@@ -308,6 +326,19 @@ function setNodeSettingsMessage(message) {
   nodeSettingsMessageEl.textContent = message;
 }
 
+function setCalibrationControlsDisabled(disabled) {
+  for (const element of [
+    ...nodeCalibrationFormEl.elements,
+    document.querySelector("#calibrate-node"),
+    document.querySelector("#delete-node-calibration"),
+    document.querySelector("#reload-node-calibration")
+  ]) {
+    if (element) {
+      element.disabled = disabled;
+    }
+  }
+}
+
 /** Runs an action scoped to the node settings modal. */
 async function runNodeAction(action, successMessage) {
   try {
@@ -347,6 +378,7 @@ function renderNodes(nodes) {
     ...nodes.map((node) => {
       const item = document.createElement("div");
       const payload = node.payload || {};
+      const isSender = payload.role === "csi_sender";
       const registryNode = nodeRecordFor(node.device_id);
       item.className = nodeHasMovement(payload) ? "node movement" : "node";
 
@@ -371,7 +403,7 @@ function renderNodes(nodes) {
       }
       item.appendChild(nodeLink);
       appendText(item, "span", String(node.ip ?? ""));
-      appendText(item, "span", `Score ${formatScore(payload.movement_score)}`);
+      appendText(item, "span", isSender ? `Sender ${payload.enabled ? "on" : "off"}` : `Score ${formatScore(payload.movement_score)}`);
 
       const activeLabel = document.createElement("label");
       activeLabel.className = "node-active";
@@ -385,13 +417,24 @@ function renderNodes(nodes) {
       activeLabel.append(" Active");
       item.appendChild(activeLabel);
 
-      const identify = document.createElement("button");
-      identify.type = "button";
-      identify.className = "node-identify-button";
-      identify.dataset.identifyDeviceId = String(node.device_id);
-      identify.textContent = "Identify";
-      identify.title = "Blink this ESP32 node's blue LED rapidly for 10 seconds.";
-      item.appendChild(identify);
+      if (isSender) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "node-sender-toggle-button";
+        toggle.dataset.senderDeviceId = String(node.device_id);
+        toggle.dataset.senderEnabled = payload.enabled ? "true" : "false";
+        toggle.textContent = payload.enabled ? "Stop Sender" : "Start Sender";
+        toggle.title = "Turn the dedicated CSI packet sender on or off.";
+        item.appendChild(toggle);
+      } else {
+        const identify = document.createElement("button");
+        identify.type = "button";
+        identify.className = "node-identify-button";
+        identify.dataset.identifyDeviceId = String(node.device_id);
+        identify.textContent = "Identify";
+        identify.title = "Blink this ESP32 node's blue LED rapidly for 10 seconds.";
+        item.appendChild(identify);
+      }
 
       const settings = document.createElement("button");
       settings.type = "button";
@@ -585,6 +628,9 @@ function renderNodeStatus(status) {
     "quiet_windows",
     "rssi",
     "noise_floor",
+    "csi_source_mac",
+    "csi_source_filter_enabled",
+    "source_filtered_samples",
     "packet_count",
     "last_packet_ms",
     "calibrating"
@@ -620,6 +666,13 @@ function populateNodeConfigForm(config) {
   nodeConfigFormEl.elements.pi_ip.value = config.pi_ip ?? "";
   setFormNumber(nodeConfigFormEl, "pi_port", config.pi_port ?? 3005);
   nodeConfigFormEl.elements.pi_api_path.value = config.pi_api_path ?? "/espdata";
+  nodeConfigFormEl.elements.csi_source_mac.value = config.csi_source_mac ?? "";
+  nodeConfigFormEl.elements.csi_source_filter_enabled.checked = Boolean(config.csi_source_filter_enabled);
+  nodeConfigFormEl.elements.enabled.checked = Boolean(config.enabled);
+  setFormNumber(nodeConfigFormEl, "packet_rate_hz", config.packet_rate_hz);
+  setFormNumber(nodeConfigFormEl, "udp_port", config.udp_port);
+  setFormNumber(nodeConfigFormEl, "payload_size", config.payload_size);
+  nodeConfigFormEl.elements.broadcast_ip.value = config.broadcast_ip ?? "";
   setFormNumber(nodeConfigFormEl, "pi_post_interval_s", Math.round((Number(config.pi_post_interval_ms) || 5000) / 1000));
   setFormNumber(nodeConfigFormEl, "idle_rate_hz", config.idle_rate_hz);
   setFormNumber(nodeConfigFormEl, "boost_rate_hz", config.boost_rate_hz);
@@ -655,6 +708,13 @@ function nodeConfigPayload() {
     pi_ip: String(form.get("pi_ip") || "").trim(),
     pi_port: Number(form.get("pi_port")),
     pi_api_path: apiPath.startsWith("/") ? apiPath : `/${apiPath}`,
+    csi_source_mac: String(form.get("csi_source_mac") || "").trim(),
+    csi_source_filter_enabled: form.get("csi_source_filter_enabled") === "on",
+    enabled: form.get("enabled") === "on",
+    packet_rate_hz: Number(form.get("packet_rate_hz")),
+    udp_port: Number(form.get("udp_port")),
+    payload_size: Number(form.get("payload_size")),
+    broadcast_ip: String(form.get("broadcast_ip") || "").trim(),
     pi_post_interval_ms: Number(form.get("pi_post_interval_s")) * 1000,
     idle_rate_hz: Number(form.get("idle_rate_hz")),
     boost_rate_hz: Number(form.get("boost_rate_hz")),
@@ -705,7 +765,9 @@ async function refreshSelectedNodeCalibration() {
 async function openNodeSettings(deviceId) {
   selectedNodeDeviceId = Number(deviceId);
   const liveNode = lastStatusNodes.find((node) => Number(node.device_id) === selectedNodeDeviceId);
+  selectedNodeRole = liveNode?.payload?.role === "csi_sender" ? "csi_sender" : "csi_receiver";
   nodeSettingsTitleEl.textContent = liveNode ? `${liveNode.name} Settings` : `Node ${selectedNodeDeviceId} Settings`;
+  setCalibrationControlsDisabled(selectedNodeRole === "csi_sender");
   setNodeSettingsMessage("Loading node settings...");
   nodeSettingsModalEl.classList.remove("hidden");
 
@@ -719,9 +781,14 @@ async function openNodeSettings(deviceId) {
     await refreshSelectedNodeStatus();
   });
 
-  await runNodeAction(async () => {
-    await refreshSelectedNodeCalibration();
-  });
+  if (selectedNodeRole === "csi_receiver") {
+    await runNodeAction(async () => {
+      await refreshSelectedNodeCalibration();
+    });
+  } else {
+    nodeCalibrationFormEl.reset();
+    nodeCalibrationFormEl.elements.valid.value = "sender";
+  }
 
   if (config) {
     setNodeSettingsMessage("Settings loaded.");
@@ -732,6 +799,8 @@ async function openNodeSettings(deviceId) {
 function closeNodeSettings() {
   nodeSettingsModalEl.classList.add("hidden");
   selectedNodeDeviceId = null;
+  selectedNodeRole = "csi_receiver";
+  setCalibrationControlsDisabled(false);
   nodeStatusDetailsEl.replaceChildren();
   nodeConfigFormEl.reset();
   nodeCalibrationFormEl.reset();
@@ -742,8 +811,8 @@ function closeNodeSettings() {
 function normalizeHistoryWindow() {
   let fromHours = Number(historyFromEl.value);
   let toHours = Number(historyToEl.value);
-  const max = Number(historyFromEl.max);
-  if (!Number.isFinite(fromHours)) fromHours = Math.min(6, max);
+  const max = Math.min(MAX_HISTORY_HOURS, Number(historyFromEl.max) || MAX_HISTORY_HOURS);
+  if (!Number.isFinite(fromHours)) fromHours = Math.min(DEFAULT_HISTORY_HOURS, max);
   if (!Number.isFinite(toHours)) toHours = 0;
   fromHours = Math.min(Math.max(fromHours, 0), max);
   toHours = Math.min(Math.max(toHours, 0), max);
@@ -806,6 +875,99 @@ function aggregateSamples(samples) {
     buckets.set(key, existing);
   }
   return [...buckets.values()];
+}
+
+/** Groups samples by node so comparison and per-node charts share ordering. */
+function samplesByNode(samples) {
+  const byNode = new Map();
+  for (const sample of samples) {
+    const key = String(sample.deviceId);
+    if (!byNode.has(key)) {
+      byNode.set(key, { name: sample.nodeName || `Node ${key}`, samples: [] });
+    }
+    byNode.get(key).samples.push(sample);
+  }
+  return byNode;
+}
+
+/** Converts asynchronous node samples into comparable normalized trend lines. */
+function comparisonSeries(samples) {
+  const now = Date.now();
+  const fromHours = historyWindow.fromHours;
+  const toHours = historyWindow.toHours;
+  const fromTime = now - fromHours * 3600000;
+  const toTime = now - toHours * 3600000;
+  const duration = Math.max(1, toTime - fromTime);
+  const binMs = Math.max(15000, Math.ceil(duration / 120));
+  const byNode = samplesByNode(samples);
+  const series = [];
+
+  [...byNode.entries()].forEach(([deviceId, group], index) => {
+    const bins = new Map();
+    for (const point of pointsForSamples(group.samples, now, fromHours, toHours)) {
+      const bin = Math.floor((point.time - fromTime) / binMs);
+      const existing = bins.get(bin) || { total: 0, count: 0, time: fromTime + bin * binMs + binMs / 2 };
+      existing.total += Number(point.score) || 0;
+      existing.count += 1;
+      bins.set(bin, existing);
+    }
+    const rawPoints = [...bins.values()]
+      .sort((a, b) => a.time - b.time)
+      .map((bin) => ({ time: bin.time, score: bin.total / Math.max(1, bin.count) }));
+    const min = Math.min(...rawPoints.map((point) => point.score));
+    const max = Math.max(...rawPoints.map((point) => point.score));
+    const spread = max - min;
+    series.push({
+      deviceId,
+      name: group.name,
+      color: COMPARISON_COLORS[index % COMPARISON_COLORS.length],
+      points: rawPoints.map((point) => ({
+        bin: Math.floor((point.time - fromTime) / binMs),
+        time: point.time,
+        score: spread > 0.000001 ? (point.score - min) / spread : 0.5
+      }))
+    });
+  });
+
+  return { series, fromTime, toTime };
+}
+
+/** Pearson trend alignment across overlapping normalized comparison points. */
+function trendAlignment(series) {
+  const correlations = [];
+  for (let i = 0; i < series.length; i += 1) {
+    for (let j = i + 1; j < series.length; j += 1) {
+      const left = series[i].points;
+      const right = series[j].points;
+      const rightByBin = new Map(right.map((point) => [point.bin, point.score]));
+      const matched = left
+        .filter((point) => rightByBin.has(point.bin))
+        .map((point) => [point.score, rightByBin.get(point.bin)]);
+      if (matched.length < 4) continue;
+      const leftValues = matched.map(([leftValue]) => leftValue);
+      const rightValues = matched.map(([, rightValue]) => rightValue);
+      const count = matched.length;
+      const leftMean = leftValues.reduce((total, value) => total + value, 0) / count;
+      const rightMean = rightValues.reduce((total, value) => total + value, 0) / count;
+      let numerator = 0;
+      let leftVariance = 0;
+      let rightVariance = 0;
+      for (let k = 0; k < count; k += 1) {
+        const leftDelta = leftValues[k] - leftMean;
+        const rightDelta = rightValues[k] - rightMean;
+        numerator += leftDelta * rightDelta;
+        leftVariance += leftDelta * leftDelta;
+        rightVariance += rightDelta * rightDelta;
+      }
+      const denominator = Math.sqrt(leftVariance * rightVariance);
+      if (denominator > 0.000001) {
+        correlations.push(numerator / denominator);
+      }
+    }
+  }
+  if (correlations.length === 0) return null;
+  const average = correlations.reduce((total, value) => total + value, 0) / correlations.length;
+  return Math.round(Math.max(0, Math.min(1, (average + 1) / 2)) * 100);
 }
 
 /**
@@ -908,20 +1070,89 @@ function drawChart(canvas, samples, options = {}) {
   }
 }
 
+/** Draws normalized sensor trends on one time-aligned chart. */
+function drawComparisonChart() {
+  const { ctx, width, height } = chartDimensions(comparisonChartEl);
+  const { series, fromTime, toTime } = comparisonSeries(movementHistory.samples);
+  const padding = { left: 42, right: 16, top: 14, bottom: 28 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const x = (time) => padding.left + ((time - fromTime) / Math.max(1, toTime - fromTime)) * innerWidth;
+  const y = (score) => padding.top + innerHeight - Math.max(0, Math.min(1, score)) * innerHeight;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "#edf1f5";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const yy = padding.top + (innerHeight * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, yy);
+    ctx.lineTo(width - padding.right, yy);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "#cad3df";
+  ctx.beginPath();
+  ctx.moveTo(padding.left, padding.top);
+  ctx.lineTo(padding.left, padding.top + innerHeight);
+  ctx.lineTo(width - padding.right, padding.top + innerHeight);
+  ctx.stroke();
+
+  ctx.font = "12px Arial, Helvetica, sans-serif";
+  ctx.fillStyle = "#53606f";
+  ctx.fillText("1.0", 10, padding.top + 4);
+  ctx.fillText("0", 24, padding.top + innerHeight);
+  ctx.fillText(`${formatHours(historyWindow.fromHours)} ago`, padding.left, height - 8);
+  ctx.textAlign = "right";
+  ctx.fillText(historyWindow.toHours === 0 ? "now" : `${formatHours(historyWindow.toHours)} ago`, width - padding.right, height - 8);
+  ctx.textAlign = "left";
+
+  if (series.length < 2) {
+    ctx.fillText("Need at least two nodes in this window.", padding.left + 12, padding.top + 32);
+  }
+
+  for (const line of series) {
+    if (line.points.length === 0) continue;
+    ctx.strokeStyle = line.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    line.points.forEach((point, index) => {
+      const px = x(point.time);
+      const py = y(point.score);
+      if (index === 0) {
+        ctx.moveTo(px, py);
+      } else {
+        ctx.lineTo(px, py);
+      }
+    });
+    ctx.stroke();
+  }
+
+  const alignment = trendAlignment(series);
+  comparisonScoreEl.textContent = alignment === null ? "n/a" : `${alignment}% aligned`;
+  comparisonLegendEl.replaceChildren(
+    ...series.map((line) => {
+      const item = document.createElement("span");
+      item.className = "legend-item";
+      const swatch = document.createElement("span");
+      swatch.className = "legend-swatch";
+      swatch.style.background = line.color;
+      item.append(swatch, document.createTextNode(line.name));
+      return item;
+    })
+  );
+}
+
 /** Redraws the aggregate chart and per-node charts from cached history data. */
 function renderMovementCharts() {
   normalizeHistoryWindow();
   const aggregate = aggregateSamples(movementHistory.samples);
   drawChart(aggregateChartEl, aggregate, { triggerLine: true, color: "#1f8a5b" });
+  drawComparisonChart();
 
-  const byNode = new Map();
-  for (const sample of movementHistory.samples) {
-    const key = String(sample.deviceId);
-    if (!byNode.has(key)) {
-      byNode.set(key, { name: sample.nodeName, samples: [] });
-    }
-    byNode.get(key).samples.push(sample);
-  }
+  const byNode = samplesByNode(movementHistory.samples);
 
   nodeChartsEl.replaceChildren(
     ...[...byNode.entries()].map(([deviceId, group]) => {
@@ -939,8 +1170,8 @@ function renderMovementCharts() {
 
 /** Extends the history sliders to cover all retained movement samples. */
 function updateHistorySliderMax(availableHours) {
-  const available = Number.isFinite(availableHours) && availableHours > 0 ? availableHours : 6;
-  const max = Math.max(0.25, Math.ceil(available * 4) / 4);
+  const available = Number.isFinite(availableHours) && availableHours > 0 ? availableHours : DEFAULT_HISTORY_HOURS;
+  const max = Math.min(MAX_HISTORY_HOURS, Math.max(DEFAULT_HISTORY_HOURS, Math.ceil(available * 4) / 4));
   for (const input of [historyFromEl, historyToEl]) {
     input.max = String(max);
   }
@@ -1128,6 +1359,16 @@ nodesEl.addEventListener("click", async (event) => {
     return;
   }
 
+  const senderDeviceId = event.target.dataset?.senderDeviceId;
+  if (senderDeviceId) {
+    const nextEnabled = event.target.dataset.senderEnabled !== "true";
+    await runAction(async () => {
+      await postJson(`/api/nodes/${senderDeviceId}/config`, { enabled: nextEnabled });
+      await refreshStatus();
+    }, nextEnabled ? "CSI sender started." : "CSI sender stopped.");
+    return;
+  }
+
   const deviceId = event.target.dataset?.deviceId;
   if (!deviceId) return;
   await runAction(() => openNodeSettings(deviceId));
@@ -1144,6 +1385,7 @@ document.querySelector("#refresh-node-status").addEventListener("click", async (
 });
 
 document.querySelector("#calibrate-node").addEventListener("click", async () => {
+  if (selectedNodeRole === "csi_sender") return;
   await runNodeAction(async () => {
     await postJson(`/api/nodes/${selectedNodeDeviceId}/calibrate`);
     await refreshSelectedNodeStatus();
@@ -1151,6 +1393,7 @@ document.querySelector("#calibrate-node").addEventListener("click", async () => 
 });
 
 document.querySelector("#delete-node-calibration").addEventListener("click", async () => {
+  if (selectedNodeRole === "csi_sender") return;
   await runNodeAction(async () => {
     await readJson(`/api/nodes/${selectedNodeDeviceId}/calibration`, { method: "DELETE" });
     await refreshSelectedNodeStatus();
@@ -1169,6 +1412,7 @@ nodeConfigFormEl.addEventListener("submit", async (event) => {
 });
 
 document.querySelector("#reload-node-calibration").addEventListener("click", async () => {
+  if (selectedNodeRole === "csi_sender") return;
   await runNodeAction(async () => {
     await refreshSelectedNodeCalibration();
   }, "Calibration reloaded.");
@@ -1176,6 +1420,7 @@ document.querySelector("#reload-node-calibration").addEventListener("click", asy
 
 nodeCalibrationFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (selectedNodeRole === "csi_sender") return;
   await runNodeAction(async () => {
     const saved = await postJson(`/api/nodes/${selectedNodeDeviceId}/calibration`, nodeCalibrationPayload());
     populateNodeCalibrationForm(saved);

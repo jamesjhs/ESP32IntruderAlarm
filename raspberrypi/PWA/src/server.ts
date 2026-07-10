@@ -15,6 +15,8 @@ import { AlarmDatabase, NodeRecord, SecuritySettings, UserRole } from "./db";
 const appConfig = loadConfig();
 const publicDir = path.resolve(__dirname, "..", "public");
 const db = new AlarmDatabase(appConfig.databasePath, appConfig.sqlCipherKey);
+const DEFAULT_HISTORY_HOURS = 0.5;
+const MAX_HISTORY_HOURS = 24;
 
 // The Python worker can be polled by browsers via /api/status and by the
 // background timer below. Cache the most recent good response briefly so the PWA
@@ -106,21 +108,22 @@ async function sendPushToEnabledSubscriptions(payload: unknown) {
 /**
  * Reads a public asset and injects the active application version.
  *
- * The files in `public/` contain `0.2.1` as a local development sentinel. At
- * runtime this helper replaces that sentinel with `APP_VERSION`/environment
- * config so installed PWAs see new cache names and asset query strings after a
- * deployment.
+ * The files in `public/` contain development sentinels. At runtime this helper
+ * replaces those sentinels with the version read from `raspberrypi/VERSION`, so
+ * installed PWAs see new cache names and asset query strings after a deploy.
  */
 async function renderVersionedAsset(fileName: string) {
   const filePath = path.join(publicDir, fileName);
   const text = await fs.readFile(filePath, "utf8");
   if (fileName === "index.html") {
-    return text.replaceAll("?v=0.2.1", `?v=${appConfig.version}`);
+    return text
+      .replaceAll("?v=dev", `?v=${appConfig.version}`)
+      .replace('<span id="version" class="badge">dev</span>', `<span id="version" class="badge">${appConfig.version}</span>`);
   }
   if (fileName === "service-worker.js") {
-    return text.replace('const APP_VERSION = "0.2.1";', `const APP_VERSION = ${JSON.stringify(appConfig.version)};`);
+    return text.replace('const APP_VERSION = "dev";', `const APP_VERSION = ${JSON.stringify(appConfig.version)};`);
   }
-  return text.replaceAll("?v=0.2.1", `?v=${appConfig.version}`);
+  return text.replaceAll("?v=dev", `?v=${appConfig.version}`);
 }
 
 /**
@@ -384,9 +387,11 @@ export function buildServer() {
   // Movement history and alert threshold configuration. These endpoints power
   // the aggregate chart, per-node charts, and Pi-side trigger line in the PWA.
   server.get<{ Querystring: { fromHours?: string; toHours?: string } }>("/api/history/movement", async (request) => {
-    const fromHours = Number(request.query.fromHours ?? "6");
+    const fromHours = Number(request.query.fromHours ?? String(DEFAULT_HISTORY_HOURS));
     const toHours = Number(request.query.toHours ?? "0");
-    return db.movementHistory(Number.isFinite(fromHours) ? fromHours : 6, Number.isFinite(toHours) ? toHours : 0);
+    const safeFromHours = Math.min(MAX_HISTORY_HOURS, Math.max(0, Number.isFinite(fromHours) ? fromHours : DEFAULT_HISTORY_HOURS));
+    const safeToHours = Math.min(MAX_HISTORY_HOURS, Math.max(0, Number.isFinite(toHours) ? toHours : 0));
+    return db.movementHistory(Math.max(safeFromHours, safeToHours), Math.min(safeFromHours, safeToHours));
   });
 
   server.get("/api/history/movement/trigger", async () => db.getMovementTriggerSettings());
