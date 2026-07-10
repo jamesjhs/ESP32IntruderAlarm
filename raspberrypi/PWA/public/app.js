@@ -595,7 +595,10 @@ function chartDimensions(canvas) {
   const rect = canvas.getBoundingClientRect();
   const scale = window.devicePixelRatio || 1;
   const width = Math.max(320, Math.floor(rect.width || canvas.parentElement.clientWidth || 640));
-  const height = Math.max(160, Number(canvas.getAttribute("height")) || 180);
+  const baseHeight = Number(canvas.dataset.logicalHeight || canvas.getAttribute("height")) || 180;
+  const height = Math.max(160, baseHeight);
+  canvas.dataset.logicalHeight = String(height);
+  canvas.style.height = `${height}px`;
   canvas.width = Math.floor(width * scale);
   canvas.height = Math.floor(height * scale);
   const ctx = canvas.getContext("2d");
@@ -634,9 +637,6 @@ function aggregateSamples(samples) {
 
 function drawChart(canvas, samples, options = {}) {
   const { ctx, width, height } = chartDimensions(canvas);
-  const padding = { left: 42, right: 16, top: 14, bottom: 28 };
-  const innerWidth = width - padding.left - padding.right;
-  const innerHeight = height - padding.top - padding.bottom;
   const now = Date.now();
   const fromHours = historyWindow.fromHours;
   const toHours = historyWindow.toHours;
@@ -645,6 +645,16 @@ function drawChart(canvas, samples, options = {}) {
   const points = pointsForSamples(samples, now, fromHours, toHours);
   const visibleMax = Math.max(0, ...points.map((point) => Number(point.score) || 0));
   const yMax = Math.max(0.5, visibleMax, options.triggerLine ? movementTrigger.threshold : 0) * 1.15;
+  const yMaxLabel = yMax.toFixed(1);
+  ctx.font = "12px Arial, Helvetica, sans-serif";
+  const padding = {
+    left: Math.max(42, Math.ceil(ctx.measureText(yMaxLabel).width) + 16),
+    right: 16,
+    top: 14,
+    bottom: 28
+  };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
   const x = (time) => padding.left + ((time - fromTime) / Math.max(1, toTime - fromTime)) * innerWidth;
   const y = (score) => padding.top + innerHeight - (Number(score) / yMax) * innerHeight;
 
@@ -669,8 +679,7 @@ function drawChart(canvas, samples, options = {}) {
   ctx.stroke();
 
   ctx.fillStyle = "#53606f";
-  ctx.font = "12px Arial, Helvetica, sans-serif";
-  ctx.fillText(yMax.toFixed(1), 6, padding.top + 4);
+  ctx.fillText(yMaxLabel, 6, padding.top + 4);
   ctx.fillText("0", 24, padding.top + innerHeight);
   ctx.fillText(`${formatHours(fromHours)} ago`, padding.left, height - 8);
   ctx.textAlign = "right";
