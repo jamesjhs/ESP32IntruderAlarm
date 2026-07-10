@@ -347,7 +347,7 @@ dd {
 }
 
 .node {
-  grid-template-columns: minmax(140px, 1fr) repeat(3, auto) auto auto;
+  grid-template-columns: minmax(140px, 1fr) repeat(6, auto);
 }
 
 .node.movement {
@@ -368,7 +368,8 @@ dd {
   width: auto;
 }
 
-.node-settings-button {
+.node-settings-button,
+.node-identify-button {
   white-space: nowrap;
 }
 

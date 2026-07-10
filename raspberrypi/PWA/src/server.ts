@@ -394,6 +394,12 @@ export function buildServer() {
     return result.body;
   });
 
+  server.post<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/identify", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/api/identify", { method: "POST" });
+    reply.code(result.status);
+    return result.body;
+  });
+
   server.get<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/calibration", async (request, reply) => {
     const result = await fetchNodeJson(Number(request.params.deviceId), "/api/calibration");
     reply.code(result.status);

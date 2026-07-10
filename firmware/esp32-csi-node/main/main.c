@@ -47,6 +47,10 @@
 #define MIN_CSI_BYTES 16
 #define MIN_WINDOW_PACKETS 3
 #define PACKET_SPIKE_SIGMA 6.0f
+#define MIN_CSI_SNR_DB 10
+#define FULL_QUALITY_CSI_SNR_DB 20
+#define MIN_BASELINE_NOISE 0.25f
+#define BASELINE_NOISE_FLOOR_FRACTION 0.03f
 #define DETECT_HISTORY_LEN 5
 #define DETECT_REQUIRED_WINDOWS 3
 #define CLEAR_REQUIRED_WINDOWS 4
@@ -64,6 +68,8 @@
 #define MOVEMENT_LED_GPIO GPIO_NUM_2
 #define MOVEMENT_LED_ON_LEVEL 1
 #define MOVEMENT_LED_OFF_LEVEL 0
+#define IDENTIFY_DURATION_MS 10000
+#define IDENTIFY_BLINK_MS 120
 #define LOG_LINE_COUNT 100
 #define LOG_LINE_LEN 192
 
@@ -171,6 +177,9 @@ static volatile uint32_t csi_accepted_samples;
 static volatile bool calibration_requested;
 static volatile bool calibration_delete_requested;
 static volatile bool calibration_apply_requested;
+static volatile bool identify_active;
+static volatile int64_t identify_until_us;
+static TaskHandle_t identify_task_handle;
 static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
 static vprintf_like_t original_log_vprintf;
 static char log_lines[LOG_LINE_COUNT][LOG_LINE_LEN];
@@ -359,7 +368,38 @@ static void movement_led_init(void)
 
 static void movement_led_set(bool movement_detected)
 {
+    if (identify_active) {
+        return;
+    }
     gpio_set_level(MOVEMENT_LED_GPIO, movement_detected ? MOVEMENT_LED_ON_LEVEL : MOVEMENT_LED_OFF_LEVEL);
+}
+
+static void identify_led_task(void *arg)
+{
+    (void)arg;
+    bool on = false;
+    while (esp_timer_get_time() < identify_until_us) {
+        on = !on;
+        gpio_set_level(MOVEMENT_LED_GPIO, on ? MOVEMENT_LED_ON_LEVEL : MOVEMENT_LED_OFF_LEVEL);
+        vTaskDelay(pdMS_TO_TICKS(IDENTIFY_BLINK_MS));
+    }
+
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    bool movement_detected = g_status.movement_detected;
+    xSemaphoreGive(state_lock);
+    identify_active = false;
+    gpio_set_level(MOVEMENT_LED_GPIO, movement_detected ? MOVEMENT_LED_ON_LEVEL : MOVEMENT_LED_OFF_LEVEL);
+    identify_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+static void start_identify_blink(void)
+{
+    identify_until_us = esp_timer_get_time() + ((int64_t)IDENTIFY_DURATION_MS * 1000);
+    identify_active = true;
+    if (identify_task_handle == NULL) {
+        xTaskCreate(identify_led_task, "identify_led", 2048, NULL, 6, &identify_task_handle);
+    }
 }
 
 static void apply_configured_sample_rate_locked(void)
@@ -611,8 +651,13 @@ static esp_err_t save_config(const node_config_t *cfg)
 static void default_calibration(calibration_data_t *cal)
 {
     memset(cal, 0, sizeof(*cal));
-    cal->baseline_noise = 0.05f;
+    cal->baseline_noise = MIN_BASELINE_NOISE;
     cal->baseline_phase_noise = 0.01f;
+}
+
+static float baseline_noise_floor(float baseline_energy)
+{
+    return fmaxf(MIN_BASELINE_NOISE, fabsf(baseline_energy) * BASELINE_NOISE_FLOOR_FRACTION);
 }
 
 static void sanitize_calibration(calibration_data_t *cal)
@@ -632,8 +677,8 @@ static void sanitize_calibration(calibration_data_t *cal)
     if (!isfinite(cal->baseline_phase_variance) || cal->baseline_phase_variance < 0.0f) {
         cal->baseline_phase_variance = 0.0f;
     }
-    if (!isfinite(cal->baseline_noise) || cal->baseline_noise < 0.05f) {
-        cal->baseline_noise = 0.05f;
+    if (!isfinite(cal->baseline_noise) || cal->baseline_noise < baseline_noise_floor(cal->baseline_energy)) {
+        cal->baseline_noise = baseline_noise_floor(cal->baseline_energy);
     }
     if (!isfinite(cal->baseline_phase_noise) || cal->baseline_phase_noise < 0.01f) {
         cal->baseline_phase_noise = 0.01f;
@@ -1010,7 +1055,7 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         return;
     }
 
-    if (info->rx_ctrl.noise_floor != 0 && info->rx_ctrl.rssi - info->rx_ctrl.noise_floor < 8) {
+    if (info->rx_ctrl.noise_floor != 0 && info->rx_ctrl.rssi - info->rx_ctrl.noise_floor < MIN_CSI_SNR_DB) {
         csi_rejected_samples++;
         return;
     }
@@ -1406,7 +1451,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
         baseline_phase = mean_phase;
         baseline_phase_variance = phase_variance;
         baseline_phase_noise = fmaxf(sqrtf(fmaxf(phase_variance, 0.0f)), 0.01f);
-        baseline_noise = fmaxf(sqrtf(fmaxf(variance, 0.0f)), 0.05f);
+        baseline_noise = fmaxf(sqrtf(fmaxf(variance, 0.0f)), baseline_noise_floor(baseline_energy));
         g_status.baseline_started_us = now;
     }
 
@@ -1424,7 +1469,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
             baseline_phase = calibration_phase_sum / (float)calibration_windows;
             baseline_phase_variance = calibration_phase_variance_sum / (float)calibration_windows;
             baseline_phase_noise = fmaxf(sqrtf(fmaxf(baseline_phase_variance, 0.0f)), 0.01f);
-            baseline_noise = fmaxf(sqrtf(fmaxf(baseline_variance, 0.0f)), 0.05f);
+            baseline_noise = fmaxf(sqrtf(fmaxf(baseline_variance, 0.0f)), baseline_noise_floor(baseline_energy));
             g_calibration.valid = true;
             g_calibration.baseline_energy = baseline_energy;
             g_calibration.baseline_variance = baseline_variance;
@@ -1444,8 +1489,9 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
         }
     }
 
-    float energy_z = fabsf(mean_energy - baseline_energy) / fmaxf(baseline_noise, 0.05f);
-    float variance_delta = fabsf(variance - baseline_variance) / fmaxf(baseline_variance + baseline_noise, 1.0f);
+    float noise_denominator = fmaxf(baseline_noise, baseline_noise_floor(baseline_energy));
+    float energy_z = fabsf(mean_energy - baseline_energy) / noise_denominator;
+    float variance_delta = fabsf(variance - baseline_variance) / fmaxf(baseline_variance + noise_denominator, 1.0f);
     float shape_delta = fabsf(mean_shape - baseline_shape) / fmaxf(baseline_shape + 0.01f, 0.01f);
     float phase_delta = (fabsf(mean_phase - baseline_phase) * 0.5f) / fmaxf(baseline_phase_noise, 0.01f);
     float phase_variance_delta = fabsf(phase_variance - baseline_phase_variance) / fmaxf(baseline_phase_variance + baseline_phase_noise, 0.01f);
@@ -1454,7 +1500,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
     if (trend_count >= 3) {
         float trend_median = median_float(trend_history, trend_count);
         float trend_mad = mad_float(trend_history, trend_count, trend_median);
-        float robust_sigma = fmaxf(trend_mad * 1.4826f, fmaxf(baseline_noise, 0.05f));
+        float robust_sigma = fmaxf(trend_mad * 1.4826f, noise_denominator);
         trend_score = clamp_f32(fabsf(mean_energy - trend_median) / robust_sigma, 0.0f, 10.0f);
     }
     trend_history[trend_index] = mean_energy;
@@ -1462,9 +1508,15 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
     if (trend_count < TREND_HISTORY_LEN) {
         trend_count++;
     }
-    float packet_quality = window_packets >= MIN_WINDOW_PACKETS ? 1.0f : 0.0f;
+    float signal_quality = 0.75f;
+    if (last->noise_floor != 0) {
+        float snr = (float)(last->rssi - last->noise_floor);
+        signal_quality = clamp_f32((snr - (float)MIN_CSI_SNR_DB) / (float)(FULL_QUALITY_CSI_SNR_DB - MIN_CSI_SNR_DB), 0.0f, 1.0f);
+    }
+    float packet_quality = window_packets >= MIN_WINDOW_PACKETS ? signal_quality : 0.0f;
     float fused_score = (0.42f * energy_z) + (0.22f * variance_delta) + (0.14f * shape_delta) + (0.14f * trend_score) + (0.08f * phase_score);
-    float score = packet_quality * clamp_f32(fused_score * g_config.motion_sensitivity, 0.0f, 10.0f);
+    float score_quality = (!calibrating && g_calibration.valid) ? packet_quality : 0.0f;
+    float score = score_quality * clamp_f32(fused_score * g_config.motion_sensitivity, 0.0f, 10.0f);
 
     bool window_detected = !calibrating && packet_quality > 0.0f && score >= g_config.movement_threshold;
     bool window_quiet = packet_quality > 0.0f && (calibrating || score <= g_config.settle_threshold);
@@ -1506,7 +1558,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
         baseline_phase = (baseline_phase * 0.99f) + (mean_phase * 0.01f);
         baseline_phase_variance = (baseline_phase_variance * 0.99f) + (phase_variance * 0.01f);
         baseline_phase_noise = (baseline_phase_noise * 0.99f) + (fabsf(mean_phase - baseline_phase) * 0.01f);
-        baseline_noise = (baseline_noise * 0.99f) + (energy_residual * 0.01f);
+        baseline_noise = fmaxf((baseline_noise * 0.99f) + (energy_residual * 0.01f), baseline_noise_floor(baseline_energy));
     }
 
     apply_configured_sample_rate_locked();
@@ -1711,6 +1763,7 @@ static cJSON *status_to_json(void)
     cJSON_AddNumberToObject(root, "calibration_remaining_ms", status.calibration_remaining_ms);
     cJSON_AddBoolToObject(root, "calibration_persisted", cal.valid);
     cJSON_AddNumberToObject(root, "calibration_windows", cal.calibration_windows);
+    cJSON_AddBoolToObject(root, "identifying", identify_active);
     cJSON_AddBoolToObject(root, "wifi_provisioned", status.wifi_provisioned);
     cJSON_AddBoolToObject(root, "sta_connected", status.sta_connected);
     return root;
@@ -2441,6 +2494,13 @@ static esp_err_t calibrate_post_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"calibrating\":true,\"duration_ms\":10000}");
 }
 
+static esp_err_t identify_post_handler(httpd_req_t *req)
+{
+    start_identify_blink();
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true,\"identifying\":true,\"duration_ms\":10000}");
+}
+
 static esp_err_t calibration_delete_handler(httpd_req_t *req)
 {
     calibration_delete_requested = true;
@@ -2546,7 +2606,7 @@ static void start_http_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 18;
+    config.max_uri_handlers = 20;
 
     ESP_ERROR_CHECK(httpd_start(&http_server, &config));
 
@@ -2557,6 +2617,8 @@ static void start_http_server(void)
     httpd_uri_t config_post = {.uri = "/api/config", .method = HTTP_POST, .handler = config_post_handler};
     httpd_uri_t config_options = {.uri = "/api/config", .method = HTTP_OPTIONS, .handler = options_handler};
     httpd_uri_t calibrate = {.uri = "/api/calibrate", .method = HTTP_POST, .handler = calibrate_post_handler};
+    httpd_uri_t identify = {.uri = "/api/identify", .method = HTTP_POST, .handler = identify_post_handler};
+    httpd_uri_t identify_options = {.uri = "/api/identify", .method = HTTP_OPTIONS, .handler = options_handler};
     httpd_uri_t calibration_get = {.uri = "/api/calibration", .method = HTTP_GET, .handler = calibration_get_handler};
     httpd_uri_t calibration_post = {.uri = "/api/calibration", .method = HTTP_POST, .handler = calibration_post_handler};
     httpd_uri_t calibration_options = {.uri = "/api/calibration", .method = HTTP_OPTIONS, .handler = options_handler};
@@ -2574,6 +2636,8 @@ static void start_http_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &config_post));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &config_options));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibrate));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &identify));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &identify_options));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_get));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_post));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_options));

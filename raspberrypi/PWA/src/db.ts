@@ -383,7 +383,6 @@ export class AlarmDatabase {
         `INSERT INTO nodes (device_id, name, ip, active, last_seen_at, payload_json)
          VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
          ON CONFLICT(device_id) DO UPDATE SET
-          name = excluded.name,
           ip = excluded.ip,
           last_seen_at = CURRENT_TIMESTAMP,
           payload_json = excluded.payload_json,

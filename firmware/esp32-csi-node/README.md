@@ -19,7 +19,9 @@ configuration.
 now reloads its baseline after reboot or power loss instead of needing an
 automatic recalibration. The local ESP32 dashboard and the Pi PWA can both read,
 edit, save, and delete the persisted calibration values through
-`/api/calibration`.
+`/api/calibration`. When no valid calibration is present, the node continues to
+report CSI sample health but suppresses movement scoring until calibration is
+explicitly run or saved.
 
 ## Build and Flash
 
@@ -157,6 +159,8 @@ values for inspection or manual repair:
 - `POST /api/config` accepts partial JSON config updates from the Pi dashboard
   or the local diagnostic page. Changes are saved to NVS.
 - `POST /api/calibrate` starts a 10 second stillness calibration.
+- `POST /api/identify` rapidly blinks the node's blue LED for 10 seconds, then
+  restores the normal movement LED state.
 - `GET /api/calibration` returns the persisted stillness calibration baseline.
 - `POST /api/calibration` accepts partial JSON calibration baseline updates,
   saves them to NVS, and applies them to the live detector.

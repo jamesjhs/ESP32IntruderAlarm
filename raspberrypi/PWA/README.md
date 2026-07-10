@@ -80,6 +80,7 @@ npm start
 | `GET` | `/api/nodes/:deviceId/config` | Proxy node configuration from a selected ESP32 node. |
 | `POST` | `/api/nodes/:deviceId/config` | Save node configuration through the ESP32 `/api/config` endpoint. |
 | `POST` | `/api/nodes/:deviceId/calibrate` | Start a 10 second quiet stillness calibration on the ESP32. |
+| `POST` | `/api/nodes/:deviceId/identify` | Blink the selected ESP32 node's blue LED for 10 seconds. |
 | `GET` | `/api/nodes/:deviceId/calibration` | Read the ESP32 persisted calibration baseline. |
 | `POST` | `/api/nodes/:deviceId/calibration` | Save ESP32 calibration baseline values to NVS. |
 | `DELETE` | `/api/nodes/:deviceId/calibration` | Clear the ESP32 persisted calibration baseline. |

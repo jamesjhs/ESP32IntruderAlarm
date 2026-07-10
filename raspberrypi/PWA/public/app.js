@@ -111,6 +111,7 @@ const NODE_CALIBRATION_HELP = {
 const NODE_ACTION_HELP = {
   refreshNodeStatus: "Fetch the latest live status directly from this ESP32 node through the Pi.",
   calibrateNode: "Ask the ESP32 to record a fresh quiet baseline. Keep the area still while it runs.",
+  identifyNode: "Blink this ESP32 node's blue LED rapidly for 10 seconds.",
   deleteNodeCalibration: "Clear the node's saved baseline so it can learn a new one.",
   saveNodeConfig: "Send these configuration values to the ESP32 node's /api/config endpoint.",
   saveNodeCalibration: "Persist these calibration baseline values to the ESP32 node's NVS.",
@@ -289,6 +290,7 @@ function renderNodes(nodes) {
       nameInput.className = "node-name-input";
       nameInput.value = String(registryNode?.name || node.name || "Unnamed node");
       nameInput.dataset.nodeRecordId = registryNode ? String(registryNode.id) : "";
+      nameInput.dataset.deviceId = String(node.device_id);
       nameInput.disabled = !registryNode;
       nameInput.title = "Friendly display name for this ESP32 node.";
       item.appendChild(nameInput);
@@ -318,6 +320,14 @@ function renderNodes(nodes) {
       activeLabel.appendChild(active);
       activeLabel.append(" Active");
       item.appendChild(activeLabel);
+
+      const identify = document.createElement("button");
+      identify.type = "button";
+      identify.className = "node-identify-button";
+      identify.dataset.identifyDeviceId = String(node.device_id);
+      identify.textContent = "Identify";
+      identify.title = "Blink this ESP32 node's blue LED rapidly for 10 seconds.";
+      item.appendChild(identify);
 
       const settings = document.createElement("button");
       settings.type = "button";
@@ -958,7 +968,15 @@ async function saveNodeFriendlyName(input) {
     input.value = "Unnamed node";
   }
   await runAction(async () => {
-    await postJson(`/api/admin/nodes/${input.dataset.nodeRecordId}/name`, { name: input.value.trim() || "Unnamed node" });
+    const savedName = input.value.trim() || "Unnamed node";
+    await postJson(`/api/admin/nodes/${input.dataset.nodeRecordId}/name`, { name: savedName });
+    if (input.dataset.deviceId) {
+      try {
+        await postJson(`/api/nodes/${input.dataset.deviceId}/config`, { name: savedName });
+      } catch (error) {
+        console.warn("ESP32 node name update failed", error);
+      }
+    }
     await refreshAdmin();
   }, "Node name saved.");
 }
@@ -977,6 +995,14 @@ nodesEl.addEventListener("keydown", async (event) => {
 });
 
 nodesEl.addEventListener("click", async (event) => {
+  const identifyDeviceId = event.target.dataset?.identifyDeviceId;
+  if (identifyDeviceId) {
+    await runAction(async () => {
+      await postJson(`/api/nodes/${identifyDeviceId}/identify`);
+    }, "Node identify blink started.");
+    return;
+  }
+
   const deviceId = event.target.dataset?.deviceId;
   if (!deviceId) return;
   await runAction(() => openNodeSettings(deviceId));
