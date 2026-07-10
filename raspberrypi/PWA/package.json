@@ -1,6 +1,6 @@
 {
   "name": "esp32-alarm-pwa",
-  "version": "0.0.1",
+  "version": "0.2.1",
   "private": true,
   "description": "TypeScript PWA/API service for ESP32IntruderAlarm",
   "engines": {

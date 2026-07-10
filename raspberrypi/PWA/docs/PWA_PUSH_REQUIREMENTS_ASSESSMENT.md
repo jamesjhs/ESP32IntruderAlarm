@@ -1,6 +1,6 @@
 # PWA And Android Push Requirements Assessment
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 ## Scope
 
@@ -33,16 +33,16 @@ TaskIt provides a useful baseline:
 | Maskable icons | Complete | `maskable-icon-192x192.png` and `maskable-icon-512x512.png` exist. |
 | Notification badges | Complete | Monochrome-friendly `72`, `96`, and `128` badges exist. |
 | Favicon and Apple icon | Complete | `favicon.png` and `apple-touch-icon.png` exist. |
-| Versioned asset URLs | Complete | Manifest, icons, CSS, service worker registration, and cached assets use `v=0.0.1`. |
-| Cache versioning | Complete | Cache name is `esp32-alarm-0.0.1`; activation removes old caches. |
+| Versioned asset URLs | Complete | Manifest, icons, CSS, service worker registration, and cached assets use `v=0.2.1`. |
+| Cache versioning | Complete | Cache name is `esp32-alarm-0.2.1`; activation removes old caches. |
 | API caching strategy | Complete | `/api/*` requests are network-first and return JSON `503` when unavailable. |
 | Navigation strategy | Complete | Navigations are network-first with cached shell fallback. |
 | Push event display | Complete | Service worker displays self-contained alarm/status payloads. |
 | Notification click handling | Complete | Clicks focus or open the PWA and navigate to the payload URL. |
 | Subscription-change signal | Complete | Service worker notifies open clients when browser subscription state changes. |
-| VAPID public key endpoint | Stubbed | `/api/push/vapid-public-key` exists and reports configured public key. |
-| Subscribe/unsubscribe API | Pending | Requires app users, sessions, SQLCipher tables, and authenticated routes. |
-| Server push sender | Pending | Requires `web-push`, stored subscriptions, event fan-out, and invalid-subscription cleanup. |
+| VAPID public key endpoint | Complete | `/api/push/vapid-public-key` reports whether keys are configured and returns the browser-safe public key. |
+| Subscribe/unsubscribe API | Complete | `/api/push/subscribe` and `/api/push/unsubscribe` persist browser subscriptions. Authentication/user binding remains a hardening task. |
+| Server push sender | Complete | `web-push` sends test notifications and movement-trigger notifications, with invalid subscriptions cleaned up on push failure. |
 
 ## Android Push Requirements
 

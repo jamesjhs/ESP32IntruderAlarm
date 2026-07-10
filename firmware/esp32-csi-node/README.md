@@ -1,5 +1,7 @@
 # ESP32 CSI Node
 
+Version: `0.2.1`
+
 Standalone ESP-IDF firmware for an ESP32 Wi-Fi CSI movement sensor node.
 
 The node captures Wi-Fi Channel State Information (CSI), reduces it into robust
@@ -10,6 +12,14 @@ The preferred system architecture is Pi-centred: ESP32 nodes perform local CSI
 capture and first-pass trigger scoring, while a Raspberry Pi provides the main
 dashboard, sends controlled UDP probe traffic, stores telemetry, and coordinates
 configuration.
+
+## Current Release Notes
+
+`0.2.1` persists stillness calibration baselines to ESP32 NVS. A calibrated node
+now reloads its baseline after reboot or power loss instead of needing an
+automatic recalibration. The local ESP32 dashboard and the Pi PWA can both read,
+edit, save, and delete the persisted calibration values through
+`/api/calibration`.
 
 ## Build and Flash
 
@@ -115,12 +125,27 @@ Use **Auto-calibrate stillness** on the dashboard after the node is installed an
 the room is quiet.
 
 Calibration runs for 10 seconds. During this time the detector suppresses motion
-triggers, averages the current still-room CSI feature windows, and replaces its
-baseline energy, variance, shape, and noise estimates. The dashboard and
-`/status.json` expose calibration progress through:
+triggers, averages the current still-room CSI feature windows, replaces its
+baseline energy, variance, shape, phase, and noise estimates, and saves that
+baseline to NVS so it survives reboot or power loss. The dashboard and
+`/status.json` expose calibration progress and persistence through:
 
 - `calibrating`
 - `calibration_remaining_ms`
+- `calibration_persisted`
+- `calibration_windows`
+
+The ESP32 dashboard and Pi node settings modal expose the persisted calibration
+values for inspection or manual repair:
+
+- `baseline_energy`
+- `baseline_variance`
+- `baseline_shape`
+- `baseline_phase`
+- `baseline_phase_variance`
+- `baseline_noise`
+- `baseline_phase_noise`
+- `calibration_windows`
 
 ## Local Endpoints
 
@@ -132,7 +157,11 @@ baseline energy, variance, shape, and noise estimates. The dashboard and
 - `POST /api/config` accepts partial JSON config updates from the Pi dashboard
   or the local diagnostic page. Changes are saved to NVS.
 - `POST /api/calibrate` starts a 10 second stillness calibration.
-- `DELETE /api/calibration` deletes the current stillness calibration baseline.
+- `GET /api/calibration` returns the persisted stillness calibration baseline.
+- `POST /api/calibration` accepts partial JSON calibration baseline updates,
+  saves them to NVS, and applies them to the live detector.
+- `DELETE /api/calibration` deletes the current stillness calibration baseline
+  from NVS and resets the live detector baseline.
 - `POST /api/provision` stores Wi-Fi credentials from the setup portal.
 - `POST /api/reset-wifi` clears stored Wi-Fi credentials and reboots into setup mode.
 

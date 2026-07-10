@@ -76,12 +76,12 @@ async function renderVersionedAsset(fileName: string) {
   const filePath = path.join(publicDir, fileName);
   const text = await fs.readFile(filePath, "utf8");
   if (fileName === "index.html") {
-    return text.replaceAll("?v=0.0.1", `?v=${appConfig.version}`);
+    return text.replaceAll("?v=0.2.1", `?v=${appConfig.version}`);
   }
   if (fileName === "service-worker.js") {
-    return text.replace('const APP_VERSION = "0.0.1";', `const APP_VERSION = ${JSON.stringify(appConfig.version)};`);
+    return text.replace('const APP_VERSION = "0.2.1";', `const APP_VERSION = ${JSON.stringify(appConfig.version)};`);
   }
-  return text.replaceAll("?v=0.0.1", `?v=${appConfig.version}`);
+  return text.replaceAll("?v=0.2.1", `?v=${appConfig.version}`);
 }
 
 function syncWorkerNodes(status: any) {
@@ -393,6 +393,24 @@ export function buildServer() {
     reply.code(result.status);
     return result.body;
   });
+
+  server.get<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/calibration", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/api/calibration");
+    reply.code(result.status);
+    return result.body;
+  });
+
+  server.post<{ Params: { deviceId: string }; Body: Record<string, unknown> }>(
+    "/api/nodes/:deviceId/calibration",
+    async (request, reply) => {
+      const result = await fetchNodeJson(Number(request.params.deviceId), "/api/calibration", {
+        method: "POST",
+        body: JSON.stringify(request.body ?? {})
+      });
+      reply.code(result.status);
+      return result.body;
+    }
+  );
 
   server.delete<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/calibration", async (request, reply) => {
     const result = await fetchNodeJson(Number(request.params.deviceId), "/api/calibration", { method: "DELETE" });

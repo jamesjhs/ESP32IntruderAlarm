@@ -1,6 +1,6 @@
 # Raspberry Pi Server
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 This directory contains the Raspberry Pi side of ESP32IntruderAlarm.
 

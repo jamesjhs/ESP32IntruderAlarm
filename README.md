@@ -4,6 +4,25 @@ An experimental, privacy-preserving intruder alarm that uses Wi-Fi Channel State
 
 The long-term goal is to place three ESP32 sensing nodes around a house and connect them, via the home router, to a Raspberry Pi backend. The ESP32 devices collect CSI features from Wi-Fi traffic. The Raspberry Pi polls each node, fuses their movement scores, exposes a local PWA dashboard, and raises an alarm when movement is detected while the system is armed. The Pi-hosted service is intended to be available at `https://house.jahosi.co.uk` through a Cloudflare Tunnel.
 
+## Current Version
+
+Current prototype version: `0.2.1`.
+
+`0.2.1` is the first version where ESP32 stillness calibration is explicitly
+power-loss safe. A completed calibration is saved to ESP32 NVS, loaded before
+movement scoring after reboot, and exposed for inspection or manual repair from
+both the ESP32 local dashboard and the Raspberry Pi PWA node settings modal.
+
+Recent implementation timeline:
+
+- `0.1.x`: ESP32 CSI node firmware, captive Wi-Fi provisioning, local dashboard,
+  node status/config APIs, Pi telemetry posting, and Raspberry Pi PWA scaffold.
+- `0.2.0`: Pi-side movement history, aggregate score graph, node settings modal,
+  VAPID/push plumbing, version-aware PWA update flow, and mobile UX refinements.
+- `0.2.1`: Persistent ESP32 calibration baselines in NVS, calibration
+  read/write/delete APIs, Pi proxy routes for calibration, editable calibration
+  panels on both dashboards, and fixed high-DPI mobile chart sizing.
+
 ## Why CSI?
 
 Channel State Information describes how a Wi-Fi signal changes as it travels through the environment. Unlike a simple RSSI signal-strength reading, CSI exposes richer per-subcarrier information such as amplitude and phase. People moving through a room disturb multipath Wi-Fi reflections, so CSI can be used as a contactless motion or presence signal without cameras.
@@ -87,6 +106,9 @@ Required behaviour:
   - `boost`: short high-rate windows after a movement threshold is crossed, potentially up to the highest reliable sample rate measured on the board.
   - `cooldown`: return to idle after movement settles, while preserving enough recent context for the Pi to classify the event.
 - Accept configuration from the Pi for sample-rate targets, thresholds, boost duration, cooldown timing, and feature-window size.
+- Persist stillness calibration baselines on the ESP32 so calibrated nodes
+  survive reboot and power loss without automatically recalibrating during
+  possible movement.
 - Serve a local web page for human inspection.
 - Serve a JSON endpoint for machine polling.
 
@@ -103,6 +125,8 @@ Candidate JSON shape:
   "noise_floor": -92,
   "movement_score": 0.37,
   "movement_detected": false,
+  "calibration_persisted": true,
+  "calibration_windows": 40,
   "baseline_age_s": 620,
   "last_packet_ms": 20
 }
@@ -146,11 +170,14 @@ Required behaviour:
 - Fuse multiple nodes into a house-level alarm state.
 - Keep the sensing pipeline alive during movement and reduce polling/storage work during quiet periods.
 - Push configuration updates to ESP32 nodes, including idle rate, boost rate, sensitivity thresholds, cooldowns, and raw-capture permissions.
+- Read, edit, and clear each node's persisted stillness calibration baseline
+  through the Pi dashboard when manual repair or transfer is needed.
 - Keep high-frequency samples in memory during burst windows and write compact summaries to storage.
 - Enforce bounded retention for events, summaries, calibration captures, and audit logs.
 - Provide modes for calibration, heuristic tuning, labelled data capture, and optional model training.
 - Expose a local API for a PWA.
-- Store recent events locally, likely in SQLite for the first version.
+- Store recent events and movement history locally in SQLite, with SQLCipher
+  preferred for deployed systems.
 
 Recommended split-service stack:
 
@@ -445,7 +472,7 @@ Candidate update JSON:
 
 ```json
 {
-  "version": "0.3.0",
+  "version": "0.2.1",
   "build": "2026-07-08T12:00:00Z",
   "mandatory": false,
   "notes": "PWA shell and push handling update"
@@ -679,7 +706,7 @@ Success criteria:
 - Whether Cloudflare Access should be mandatory for all remote access or allow a local-only bypass on the LAN.
 - Whether `cloudflared` should route directly to the Node service or through a local Nginx reverse proxy.
 - Whether SQLCipher unlock should be unattended after reboot or require a local/manual unlock step.
-- Whether owner/admin accounts should require MFA from the first version.
+- Whether owner/admin accounts should require MFA before any public exposure.
 - Which notification events should be pushed immediately and which should only appear in the PWA event history.
 - Which update types should be mandatory and block stale clients until refresh.
 - Whether the final system should integrate with Home Assistant, MQTT, or remain standalone.

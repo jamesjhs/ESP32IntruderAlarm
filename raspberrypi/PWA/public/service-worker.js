@@ -1,4 +1,4 @@
-const APP_VERSION = "0.0.1";
+const APP_VERSION = "0.2.1";
 const CACHE_NAME = `esp32-alarm-${APP_VERSION}`;
 const ASSET_VERSION = `?v=${APP_VERSION}`;
 

@@ -40,7 +40,7 @@ def load_config() -> WorkerConfig:
         telemetry_path = f"/{telemetry_path}"
 
     return WorkerConfig(
-        version=os.getenv("APP_VERSION", "0.0.1"),
+        version=os.getenv("APP_VERSION", "0.2.1"),
         host=os.getenv("WORKER_HOST", "0.0.0.0"),
         port=int(os.getenv("WORKER_PORT", "3005")),
         telemetry_path=telemetry_path,

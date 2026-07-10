@@ -1,10 +1,17 @@
 # TypeScript PWA/API Service
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 This app serves the Raspberry Pi web dashboard and browser-facing API on
 `127.0.0.1:3015`. It is the only service intended to sit behind Cloudflare
 Tunnel and Cloudflare Access/App Login.
+
+## Current Release Notes
+
+`0.2.1` adds Pi-side read/save/delete controls for ESP32 persisted calibration
+baselines, keeps PWA cache/version assets aligned with the app version, and
+retains the movement history, trigger threshold, and push notification plumbing
+introduced during the `0.2.x` dashboard work.
 
 ## Install
 
@@ -51,6 +58,9 @@ npm start
 | `GET` | `/api/version` | Server version for PWA update checks. |
 | `GET` | `/api/healthz` | Web service health check. |
 | `GET` | `/api/status` | Live worker/node status via loopback. |
+| `GET` | `/api/history/movement` | Movement score samples for aggregate and per-node charts. |
+| `GET` | `/api/history/movement/trigger` | Current Pi-side movement trigger threshold and push flag. |
+| `POST` | `/api/history/movement/trigger` | Save Pi-side movement trigger threshold and push flag. |
 | `GET` | `/api/push/vapid-public-key` | Browser-safe VAPID public key. |
 | `POST` | `/api/push/subscribe` | Store/update the current browser push subscription. |
 | `POST` | `/api/push/unsubscribe` | Remove the current browser push subscription. |
@@ -62,8 +72,17 @@ npm start
 | `POST` | `/api/admin/vapid/generate` | Generate and persist VAPID keys. |
 | `POST` | `/api/admin/vapid` | Save externally generated VAPID keys. |
 | `PUT` | `/api/admin/nodes/:id` | Update persistent node metadata. |
+| `POST` | `/api/admin/nodes/:id/active` | Include or exclude a node from active monitoring. |
+| `POST` | `/api/admin/nodes/:id/name` | Rename a known node. |
 | `POST` | `/api/admin/security` | Save security-setting flags. |
 | `POST` | `/api/admin/backup` | Checkpoint and copy the SQLite database to the backup directory. |
+| `GET` | `/api/nodes/:deviceId/status` | Proxy live status from a selected ESP32 node. |
+| `GET` | `/api/nodes/:deviceId/config` | Proxy node configuration from a selected ESP32 node. |
+| `POST` | `/api/nodes/:deviceId/config` | Save node configuration through the ESP32 `/api/config` endpoint. |
+| `POST` | `/api/nodes/:deviceId/calibrate` | Start a 10 second quiet stillness calibration on the ESP32. |
+| `GET` | `/api/nodes/:deviceId/calibration` | Read the ESP32 persisted calibration baseline. |
+| `POST` | `/api/nodes/:deviceId/calibration` | Save ESP32 calibration baseline values to NVS. |
+| `DELETE` | `/api/nodes/:deviceId/calibration` | Clear the ESP32 persisted calibration baseline. |
 
 ## Persistence
 
@@ -92,6 +111,14 @@ banner when the host version changes, and can unregister old service workers,
 clear old `esp32-alarm-*` caches, and reload from the host. The service serves
 version-injected `service-worker.js`, `manifest.webmanifest`, and
 `app-config.js` responses with `Cache-Control: no-store`.
+
+## Node Calibration
+
+The node settings modal can start a fresh ESP32 stillness calibration, delete a
+stored baseline, or inspect/edit the persisted calibration values saved in the
+ESP32's NVS. The Pi does not invent these values; it proxies the ESP32
+`/api/calibration` endpoint so calibrated devices can survive power loss without
+automatic recalibration during possible movement.
 
 See [PWA push requirements](docs/PWA_PUSH_REQUIREMENTS_ASSESSMENT.md) for the
 TaskIt comparison and remaining server-side push checklist.

@@ -1,6 +1,6 @@
 # PWA Technical Manual
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 ## Responsibilities
 
@@ -10,7 +10,8 @@ The TypeScript service owns the public application surface:
 - API version endpoint
 - status API that reads the Python worker over loopback
 - Cloudflare Access-aware response handling
-- future app sessions, roles, VAPID push, SMTP settings, and audit logs
+- persistent admin data, node registry, VAPID push, movement events, and audit logs
+- ESP32 node proxy routes for status, configuration, and persisted calibration
 
 ## Runtime
 
@@ -18,7 +19,10 @@ The service binds to `127.0.0.1:3015` by default. Cloudflare Tunnel should route
 `house.jahosi.co.uk` to this loopback address.
 
 The ESP32 telemetry endpoint is not part of this service. ESP32 devices should
-post directly to the Python worker on LAN port `3005` at `/espdata`.
+post directly to the Python worker on LAN port `3005` at `/espdata`. The PWA
+service does proxy selected ESP32 node actions, including `/api/config`,
+`/api/calibrate`, and `/api/calibration`, so the browser does not need direct
+node access.
 
 ## API Design
 
@@ -26,7 +30,7 @@ The PWA should use network-first API requests and verify `Content-Type` before
 parsing JSON. If Cloudflare Access returns an HTML login/challenge page, the
 client should stop background polling and navigate back to the protected origin.
 
-Future state-changing routes should use:
+State-changing routes should continue moving toward:
 
 - app session cookies
 - CSRF protection
@@ -34,7 +38,8 @@ Future state-changing routes should use:
 - audit logging
 - re-authentication for high-risk actions
 
-Future push subscription routes should follow the TaskIt validation shape:
+Push subscription routes follow the TaskIt-oriented shape and should continue
+to enforce:
 
 - return the VAPID public key from a public read-only endpoint
 - require an authenticated user for subscribe/unsubscribe

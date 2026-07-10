@@ -17,7 +17,7 @@ export interface AppConfig {
 
 export function loadConfig(): AppConfig {
   return {
-    version: process.env.APP_VERSION ?? "0.0.1",
+    version: process.env.APP_VERSION ?? "0.2.1",
     build: process.env.APP_BUILD ?? null,
     host: process.env.PWA_HOST ?? "127.0.0.1",
     port: Number(process.env.PWA_PORT ?? "3015"),

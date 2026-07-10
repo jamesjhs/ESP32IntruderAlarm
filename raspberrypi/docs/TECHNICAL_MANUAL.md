@@ -1,6 +1,6 @@
 # Raspberry Pi Technical Manual
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 ## Architecture
 
@@ -11,9 +11,10 @@ The TypeScript PWA service owns browser-facing concerns:
 - PWA shell and static assets
 - version endpoint
 - Cloudflare Access-aware session handling
-- app users, roles, sessions, and audit logging in later migrations
-- VAPID push settings and subscriptions in later migrations
-- authenticated admin APIs
+- persistent admin records, VAPID settings, push subscriptions, events, nodes,
+  movement trigger settings, and audit log tables
+- ESP32 node proxy APIs for status, configuration, calibration, and calibration
+  deletion
 
 The Python worker owns LAN sensor concerns:
 
@@ -21,7 +22,7 @@ The Python worker owns LAN sensor concerns:
 - in-memory live node state
 - sparse health and diagnostics APIs
 - UDP probe traffic timer
-- future movement fusion and database event writes
+- compact telemetry relay for the PWA status and history pipeline
 
 The services communicate over loopback. The PWA service reads worker status from
 `http://127.0.0.1:3005/internal/status`.
@@ -45,8 +46,13 @@ risk of another LAN client spoofing an ESP32.
 
 ## Data Model Direction
 
-The initial scaffold stores live node state in memory. The planned persistent
-SQLCipher database should contain:
+The Python worker stores live node state in memory. The TypeScript PWA service
+owns the current SQLite database, which already contains tables for admin
+records, push, node registry, movement history, events, settings, and audit
+records. A production deployment should use a SQLCipher-capable SQLite build so
+the same schema is encrypted at rest.
+
+The persistent database should contain:
 
 - users
 - sessions

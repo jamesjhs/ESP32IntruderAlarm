@@ -1,6 +1,6 @@
 # Raspberry Pi How-To Guides
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 ## How To Configure First Install
 

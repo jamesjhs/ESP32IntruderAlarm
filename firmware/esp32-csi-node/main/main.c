@@ -26,6 +26,7 @@
 
 #define WIFI_NAMESPACE "wifi"
 #define CFG_NAMESPACE "nodecfg"
+#define CAL_NAMESPACE "nodecal"
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
 
@@ -134,12 +135,25 @@ typedef struct {
     bool sta_connected;
 } node_status_t;
 
+typedef struct {
+    bool valid;
+    float baseline_energy;
+    float baseline_variance;
+    float baseline_shape;
+    float baseline_phase;
+    float baseline_phase_variance;
+    float baseline_noise;
+    float baseline_phase_noise;
+    uint32_t calibration_windows;
+} calibration_data_t;
+
 static const char *TAG = "csi-node";
 static QueueHandle_t csi_queue;
 static SemaphoreHandle_t state_lock;
 static EventGroupHandle_t wifi_event_group;
 static node_config_t g_config;
 static node_status_t g_status;
+static calibration_data_t g_calibration;
 static httpd_handle_t http_server;
 static esp_netif_t *sta_netif;
 static esp_netif_t *ap_netif;
@@ -156,6 +170,7 @@ static volatile uint32_t csi_queue_drops;
 static volatile uint32_t csi_accepted_samples;
 static volatile bool calibration_requested;
 static volatile bool calibration_delete_requested;
+static volatile bool calibration_apply_requested;
 static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
 static vprintf_like_t original_log_vprintf;
 static char log_lines[LOG_LINE_COUNT][LOG_LINE_LEN];
@@ -589,6 +604,121 @@ static esp_err_t save_config(const node_config_t *cfg)
     }
 
     err = nvs_commit(nvs);
+    nvs_close(nvs);
+    return err;
+}
+
+static void default_calibration(calibration_data_t *cal)
+{
+    memset(cal, 0, sizeof(*cal));
+    cal->baseline_noise = 0.05f;
+    cal->baseline_phase_noise = 0.01f;
+}
+
+static void sanitize_calibration(calibration_data_t *cal)
+{
+    if (!isfinite(cal->baseline_energy) || cal->baseline_energy < 0.0f) {
+        cal->baseline_energy = 0.0f;
+    }
+    if (!isfinite(cal->baseline_variance) || cal->baseline_variance < 0.0f) {
+        cal->baseline_variance = 0.0f;
+    }
+    if (!isfinite(cal->baseline_shape) || cal->baseline_shape < 0.0f) {
+        cal->baseline_shape = 0.0f;
+    }
+    if (!isfinite(cal->baseline_phase)) {
+        cal->baseline_phase = 0.0f;
+    }
+    if (!isfinite(cal->baseline_phase_variance) || cal->baseline_phase_variance < 0.0f) {
+        cal->baseline_phase_variance = 0.0f;
+    }
+    if (!isfinite(cal->baseline_noise) || cal->baseline_noise < 0.05f) {
+        cal->baseline_noise = 0.05f;
+    }
+    if (!isfinite(cal->baseline_phase_noise) || cal->baseline_phase_noise < 0.01f) {
+        cal->baseline_phase_noise = 0.01f;
+    }
+    cal->valid = cal->valid && cal->baseline_energy > 0.01f;
+    if (!cal->valid) {
+        default_calibration(cal);
+    }
+}
+
+static esp_err_t load_calibration(calibration_data_t *cal)
+{
+    default_calibration(cal);
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(CAL_NAMESPACE, NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t valid = 0;
+    nvs_get_u8(nvs, "valid", &valid);
+    cal->valid = valid != 0;
+    nvs_get_u32(nvs, "windows", &cal->calibration_windows);
+
+    size_t f_len = sizeof(float);
+    nvs_get_blob(nvs, "energy", &cal->baseline_energy, &f_len);
+    f_len = sizeof(float);
+    nvs_get_blob(nvs, "variance", &cal->baseline_variance, &f_len);
+    f_len = sizeof(float);
+    nvs_get_blob(nvs, "shape", &cal->baseline_shape, &f_len);
+    f_len = sizeof(float);
+    nvs_get_blob(nvs, "phase", &cal->baseline_phase, &f_len);
+    f_len = sizeof(float);
+    nvs_get_blob(nvs, "phase_var", &cal->baseline_phase_variance, &f_len);
+    f_len = sizeof(float);
+    nvs_get_blob(nvs, "noise", &cal->baseline_noise, &f_len);
+    f_len = sizeof(float);
+    nvs_get_blob(nvs, "phase_noise", &cal->baseline_phase_noise, &f_len);
+    nvs_close(nvs);
+    sanitize_calibration(cal);
+    return ESP_OK;
+}
+
+static esp_err_t save_calibration(const calibration_data_t *cal)
+{
+    calibration_data_t copy = *cal;
+    sanitize_calibration(&copy);
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(CAL_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t valid = copy.valid ? 1 : 0;
+    if ((err = nvs_set_u8(nvs, "valid", valid)) != ESP_OK ||
+        (err = nvs_set_u32(nvs, "windows", copy.calibration_windows)) != ESP_OK ||
+        (err = nvs_set_blob(nvs, "energy", &copy.baseline_energy, sizeof(float))) != ESP_OK ||
+        (err = nvs_set_blob(nvs, "variance", &copy.baseline_variance, sizeof(float))) != ESP_OK ||
+        (err = nvs_set_blob(nvs, "shape", &copy.baseline_shape, sizeof(float))) != ESP_OK ||
+        (err = nvs_set_blob(nvs, "phase", &copy.baseline_phase, sizeof(float))) != ESP_OK ||
+        (err = nvs_set_blob(nvs, "phase_var", &copy.baseline_phase_variance, sizeof(float))) != ESP_OK ||
+        (err = nvs_set_blob(nvs, "noise", &copy.baseline_noise, sizeof(float))) != ESP_OK ||
+        (err = nvs_set_blob(nvs, "phase_noise", &copy.baseline_phase_noise, sizeof(float))) != ESP_OK) {
+        nvs_close(nvs);
+        return err;
+    }
+
+    err = nvs_commit(nvs);
+    nvs_close(nvs);
+    return err;
+}
+
+static esp_err_t clear_calibration(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(CAL_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : err;
+    }
+    err = nvs_erase_all(nvs);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
     nvs_close(nvs);
     return err;
 }
@@ -1196,6 +1326,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
     static uint8_t confirm_windows;
     static uint8_t quiet_windows;
     static bool calibrating;
+    static bool baseline_loaded;
     static int64_t calibration_end_us;
     static float calibration_energy_sum;
     static float calibration_variance_sum;
@@ -1206,6 +1337,22 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
 
     int64_t now = esp_timer_get_time();
     xSemaphoreTake(state_lock, portMAX_DELAY);
+
+    if (!baseline_loaded || calibration_apply_requested) {
+        calibration_apply_requested = false;
+        if (g_calibration.valid) {
+            baseline_energy = g_calibration.baseline_energy;
+            baseline_variance = g_calibration.baseline_variance;
+            baseline_shape = g_calibration.baseline_shape;
+            baseline_phase = g_calibration.baseline_phase;
+            baseline_phase_variance = g_calibration.baseline_phase_variance;
+            baseline_noise = g_calibration.baseline_noise;
+            baseline_phase_noise = g_calibration.baseline_phase_noise;
+            g_status.baseline_started_us = now;
+            ESP_LOGI(TAG, "Loaded persisted CSI calibration baseline");
+        }
+        baseline_loaded = true;
+    }
 
     if (calibration_requested) {
         calibration_requested = false;
@@ -1238,6 +1385,8 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
         baseline_phase_variance = 0.0f;
         baseline_phase_noise = 0.01f;
         baseline_noise = 0.05f;
+        baseline_loaded = true;
+        default_calibration(&g_calibration);
         trend_count = 0;
         trend_index = 0;
         detection_history = 0;
@@ -1246,6 +1395,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
         quiet_windows = 0;
         g_status.state = SENSE_IDLE;
         g_status.baseline_started_us = now;
+        clear_calibration();
         ESP_LOGI(TAG, "CSI calibration data deleted; baseline will rebuild from live windows");
     }
 
@@ -1275,6 +1425,19 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
             baseline_phase_variance = calibration_phase_variance_sum / (float)calibration_windows;
             baseline_phase_noise = fmaxf(sqrtf(fmaxf(baseline_phase_variance, 0.0f)), 0.01f);
             baseline_noise = fmaxf(sqrtf(fmaxf(baseline_variance, 0.0f)), 0.05f);
+            g_calibration.valid = true;
+            g_calibration.baseline_energy = baseline_energy;
+            g_calibration.baseline_variance = baseline_variance;
+            g_calibration.baseline_shape = baseline_shape;
+            g_calibration.baseline_phase = baseline_phase;
+            g_calibration.baseline_phase_variance = baseline_phase_variance;
+            g_calibration.baseline_noise = baseline_noise;
+            g_calibration.baseline_phase_noise = baseline_phase_noise;
+            g_calibration.calibration_windows = calibration_windows;
+            esp_err_t save_err = save_calibration(&g_calibration);
+            if (save_err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to save CSI calibration: %s", esp_err_to_name(save_err));
+            }
             g_status.baseline_started_us = now;
             calibrating = false;
             ESP_LOGI(TAG, "CSI stillness calibration complete");
@@ -1488,7 +1651,7 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *json)
     }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
     esp_err_t err = httpd_resp_sendstr(req, body);
     free(body);
@@ -1508,9 +1671,11 @@ static cJSON *status_to_json(void)
 {
     node_config_t cfg;
     node_status_t status;
+    calibration_data_t cal;
     xSemaphoreTake(state_lock, portMAX_DELAY);
     cfg = g_config;
     status = g_status;
+    cal = g_calibration;
     status.last_packet_ms = status.last_packet_us > 0 ? (uint32_t)((esp_timer_get_time() - status.last_packet_us) / 1000LL) : 0;
     xSemaphoreGive(state_lock);
 
@@ -1544,6 +1709,8 @@ static cJSON *status_to_json(void)
     cJSON_AddNumberToObject(root, "quiet_windows", status.quiet_windows);
     cJSON_AddBoolToObject(root, "calibrating", status.calibrating);
     cJSON_AddNumberToObject(root, "calibration_remaining_ms", status.calibration_remaining_ms);
+    cJSON_AddBoolToObject(root, "calibration_persisted", cal.valid);
+    cJSON_AddNumberToObject(root, "calibration_windows", cal.calibration_windows);
     cJSON_AddBoolToObject(root, "wifi_provisioned", status.wifi_provisioned);
     cJSON_AddBoolToObject(root, "sta_connected", status.sta_connected);
     return root;
@@ -1694,6 +1861,31 @@ static cJSON *config_to_json(void)
     return root;
 }
 
+static cJSON *calibration_to_json(void)
+{
+    calibration_data_t cal;
+    node_status_t status;
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    cal = g_calibration;
+    status = g_status;
+    xSemaphoreGive(state_lock);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "valid", cal.valid);
+    cJSON_AddNumberToObject(root, "baseline_energy", cal.baseline_energy);
+    cJSON_AddNumberToObject(root, "baseline_variance", cal.baseline_variance);
+    cJSON_AddNumberToObject(root, "baseline_shape", cal.baseline_shape);
+    cJSON_AddNumberToObject(root, "baseline_phase", cal.baseline_phase);
+    cJSON_AddNumberToObject(root, "baseline_phase_variance", cal.baseline_phase_variance);
+    cJSON_AddNumberToObject(root, "baseline_noise", cal.baseline_noise);
+    cJSON_AddNumberToObject(root, "baseline_phase_noise", cal.baseline_phase_noise);
+    cJSON_AddNumberToObject(root, "calibration_windows", cal.calibration_windows);
+    cJSON_AddBoolToObject(root, "calibrating", status.calibrating);
+    cJSON_AddNumberToObject(root, "calibration_remaining_ms", status.calibration_remaining_ms);
+    cJSON_AddNumberToObject(root, "baseline_age_s", status.baseline_age_s);
+    return root;
+}
+
 /**
  * Introduction:
  * Reads the complete HTTP request body into a caller-provided buffer and
@@ -1841,6 +2033,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "input{background:#0d1116;color:#ecf2f8}button{background:#2e7d5b;color:white;cursor:pointer}form{display:grid;gap:10px;max-width:420px;margin-top:24px}"
         ".controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:20px}.control{display:grid;gap:6px;border:1px solid #33404b;border-radius:8px;padding:12px;background:#182029}"
         ".control span{color:#9fb0bf;font-size:12px;text-transform:uppercase}.control b{font-size:18px;overflow-wrap:anywhere}input[type=range]{width:100%;padding:0}.actions{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}"
+        ".calform{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px}.calform label{display:grid;gap:5px;color:#9fb0bf;font-size:12px;text-transform:uppercase}.calform input{width:100%;box-sizing:border-box}.calform .wide{grid-column:1/-1}"
         ".legend{display:flex;gap:14px;align-items:center;margin-top:10px;color:#9fb0bf;font-size:13px;flex-wrap:wrap}.sw{display:inline-block;width:22px;height:3px;margin-right:6px;vertical-align:middle}.score{background:#5bd19a}.rate{background:#62a8ff}.th{background:#f6c85f}.settle{background:#5d6670}"
         ".glossary{margin-top:28px;border-top:1px solid #33404b;padding-top:18px}.glossary h2{margin:0 0 12px}.glossary dl{display:grid;grid-template-columns:minmax(160px,240px) 1fr;gap:9px 14px}.glossary dt{color:#ecf2f8;font-weight:700}.glossary dd{margin:0;color:#b9c7d3;line-height:1.45}@media(max-width:640px){.glossary dl{grid-template-columns:1fr}.glossary dd{margin-bottom:8px}}"
         "canvas{width:100%;height:220px;margin-top:18px;border:1px solid #33404b;border-radius:8px;background:#0d1116}"
@@ -1863,6 +2056,13 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<label class=\"control\"><span>Graph Rate Max</span><b id=\"grv\">160</b><input id=\"gr\" type=\"range\" min=\"10\" max=\"250\" step=\"10\" value=\"160\"></label>"
         "<label class=\"control\"><span>Graph Update Rate</span><b id=\"guv\">1.0 Hz</b><input id=\"gu\" type=\"range\" min=\"0.2\" max=\"20\" step=\"0.2\" value=\"1\"></label></div>"
         "<div class=\"actions\"><button id=\"cal\" type=\"button\">Auto-calibrate stillness</button><button id=\"delcal\" type=\"button\">Delete calibration data</button><span id=\"calmsg\"></span></div>"
+        "<section><h2>Persisted Calibration</h2><div class=\"calform\">"
+        "<label>Valid<input id=\"cv\" type=\"text\" readonly></label><label>Windows<input id=\"cw\" type=\"number\" min=\"0\" step=\"1\"></label>"
+        "<label>Energy<input id=\"ce\" type=\"number\" min=\"0\" step=\"0.000001\"></label><label>Variance<input id=\"cvar\" type=\"number\" min=\"0\" step=\"0.000001\"></label>"
+        "<label>Shape<input id=\"csh\" type=\"number\" min=\"0\" step=\"0.000001\"></label><label>Phase<input id=\"cph\" type=\"number\" step=\"0.000001\"></label>"
+        "<label>Phase variance<input id=\"cpv\" type=\"number\" min=\"0\" step=\"0.000001\"></label><label>Noise<input id=\"cno\" type=\"number\" min=\"0.05\" step=\"0.000001\"></label>"
+        "<label>Phase noise<input id=\"cpn\" type=\"number\" min=\"0.01\" step=\"0.000001\"></label><div class=\"actions wide\"><button id=\"savecal\" type=\"button\">Save Calibration Values</button><button id=\"reloadcal\" type=\"button\">Reload Calibration Values</button></div>"
+        "</div></section>"
         "<form method=\"post\" action=\"/api/provision\"><h2>Wi-Fi Provisioning</h2><input name=\"ssid\" placeholder=\"2.4 GHz SSID\" required>"
         "<input name=\"password\" type=\"password\" placeholder=\"Wi-Fi password\"><button type=\"submit\">Save Wi-Fi</button></form>"
         "<section class=\"glossary\"><h2>Dashboard Glossary</h2><dl>"
@@ -1871,6 +2071,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<dt>accepted_csi_rate_hz</dt><dd>The longer one-second accepted CSI callback rate. Use this to judge whether probe traffic is really reaching the CSI callback.</dd>"
         "<dt>movement_score</dt><dd>The fused movement score after sensitivity is applied. It combines energy change, variance change, subcarrier shape change, trend deviation, and a weak phase proxy. One spike above threshold is evidence, not automatically a movement event.</dd>"
         "<dt>baseline_noise</dt><dd>The detector's current estimate of still-room CSI noise. A higher value means the room/link is noisier, so the same physical motion may score lower.</dd>"
+        "<dt>calibration_persisted</dt><dd>Whether a stillness calibration baseline is saved in NVS and will be reused after reboot or power loss.</dd>"
         "<dt>trend_score</dt><dd>A robust comparison against the recent rolling median. It helps catch sudden departures from the recent normal pattern while ignoring isolated outliers.</dd>"
         "<dt>phase_score</dt><dd>A cautious phase-like component derived from CSI I/Q changes. It can help, but is deliberately weighted lightly because ESP32 phase is noisy.</dd>"
         "<dt>confirm_windows</dt><dd>How many consecutive feature windows have crossed the detection threshold. Movement normally needs repeated windows, so this explains why a brief spike may not latch.</dd>"
@@ -1902,13 +2103,16 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<dt>Graph Rate Max</dt><dd>The top of the sample-rate axis on the chart. It changes display scale only and is not saved.</dd>"
         "<dt>Graph Update Rate</dt><dd>How often this browser page polls and redraws. It affects the page only; high values add extra HTTP traffic.</dd>"
         "</dl></section>"
-        "<script>const keys=['sensing_state','sample_rate_hz','accepted_csi_rate_hz','movement_score','baseline_noise','trend_score','phase_score','confirm_windows','quiet_windows','movement_detected','rssi','noise_floor','rejected_samples','filtered_samples','throttled_samples','queue_drops','last_packet_ms','accepted_samples','packet_count'];"
-        "let cfg=null,scoreMax=10,rateMax=160,timer=null,busy=false,msgUntil=0;const hist=[];function setText(e,v,d=1){e.textContent=Number(v).toFixed(d)}"
+        "<script>const keys=['sensing_state','sample_rate_hz','accepted_csi_rate_hz','movement_score','baseline_noise','trend_score','phase_score','confirm_windows','quiet_windows','movement_detected','calibration_persisted','calibration_windows','rssi','noise_floor','rejected_samples','filtered_samples','throttled_samples','queue_drops','last_packet_ms','accepted_samples','packet_count'];"
+        "let cfg=null,scoreMax=10,rateMax=160,timer=null,busy=false,msgUntil=0,calWas=false;const hist=[];function setText(e,v,d=1){e.textContent=Number(v).toFixed(d)}"
         "function fmt(k,v){return (['movement_score','baseline_noise','trend_score','phase_score'].includes(k))?Number(v).toFixed(3):v}"
         "function idLabel(v){return String(Number(v)||0)}"
         "function apiPath(){let p=pa.value.trim()||'/espdata';return p[0]=='/'?p:'/'+p}"
         "function apiUrl(){return 'http://'+(pi.value.trim()||'{pi-IP-address}')+':'+(pp.value||3005)+apiPath()}"
         "function refreshPi(){piv.textContent=pi.value.trim()||'unset';ppv.textContent=pp.value||3005;pav.textContent=apiUrl()}"
+        "function setCal(x){cv.value=x.valid?'yes':'no';cw.value=x.calibration_windows||0;ce.value=Number(x.baseline_energy||0).toFixed(6);cvar.value=Number(x.baseline_variance||0).toFixed(6);csh.value=Number(x.baseline_shape||0).toFixed(6);cph.value=Number(x.baseline_phase||0).toFixed(6);cpv.value=Number(x.baseline_phase_variance||0).toFixed(6);cno.value=Number(x.baseline_noise||0.05).toFixed(6);cpn.value=Number(x.baseline_phase_noise||0.01).toFixed(6)}"
+        "async function loadCal(){setCal(await(await fetch('/api/calibration')).json())}"
+        "async function saveCal(){const body={calibration_windows:+cw.value,baseline_energy:+ce.value,baseline_variance:+cvar.value,baseline_shape:+csh.value,baseline_phase:+cph.value,baseline_phase_variance:+cpv.value,baseline_noise:+cno.value,baseline_phase_noise:+cpn.value};setCal(await(await fetch('/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json());calmsg.textContent='Calibration values saved';msgUntil=Date.now()+3000}"
         "async function saveCfg(){const body={device_id:+did.value,pi_ip:pi.value.trim(),pi_port:+pp.value,pi_api_path:apiPath(),pi_post_interval_ms:+pt.value*1000,movement_threshold:+m.value,settle_threshold:+se.value,motion_sensitivity:+sn.value,idle_rate_hz:+ir.value,boost_rate_hz:+br.value,boost_duration_ms:+bd.value*1000,cooldown_ms:+cd.value*1000,feature_window_ms:+fw.value};cfg=await(await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();did.value=cfg.device_id;didv.textContent=idLabel(cfg.device_id);pi.value=cfg.pi_ip||'';pp.value=cfg.pi_port||3005;pa.value=cfg.pi_api_path||'/espdata';pt.value=Math.round((cfg.pi_post_interval_ms||5000)/1000);ptv.textContent=pt.value+'s';refreshPi()}"
         "function dims(){return{l:44,r:48,t:12,b:24,w:chart.width-92,h:chart.height-36}}"
         "function y(v,max,d){return d.t+d.h-Math.min(1,Math.max(0,v/max))*d.h}"
@@ -1916,15 +2120,16 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "function line(c,a,color,max,d){c.strokeStyle=color;c.beginPath();a.forEach((v,i)=>{let x=d.l+i*(d.w/119),yy=y(v,max,d);i?c.lineTo(x,yy):c.moveTo(x,yy)});c.stroke()}"
         "function hline(c,v,max,color,d,dash){let yy=y(v,max,d);c.strokeStyle=color;c.setLineDash(dash?[6,4]:[]);c.beginPath();c.moveTo(d.l,yy);c.lineTo(d.l+d.w,yy);c.stroke();c.setLineDash([])}"
         "function draw(){const c=chart.getContext('2d'),d=dims();c.clearRect(0,0,chart.width,chart.height);axes(c,d);c.lineWidth=2;line(c,hist.map(x=>x.m),'#5bd19a',scoreMax,d);line(c,hist.map(x=>x.r),'#62a8ff',rateMax,d);hline(c,+m.value,scoreMax,'#f6c85f',d,true);hline(c,+se.value,scoreMax,'#5d6670',d,false)}"
-        "async function init(){cfg=await(await fetch('/api/config')).json();did.value=cfg.device_id;pi.value=cfg.pi_ip||'';pp.value=cfg.pi_port||3005;pa.value=cfg.pi_api_path||'/espdata';pt.value=Math.round((cfg.pi_post_interval_ms||5000)/1000);m.value=cfg.movement_threshold;se.value=cfg.settle_threshold;sn.value=cfg.motion_sensitivity;ir.value=cfg.idle_rate_hz;br.value=cfg.boost_rate_hz;bd.value=Math.round(cfg.boost_duration_ms/1000);cd.value=Math.round(cfg.cooldown_ms/1000);fw.value=cfg.feature_window_ms;didv.textContent=idLabel(did.value);refreshPi();ptv.textContent=pt.value+'s';setText(mv,m.value);setText(sv,se.value);setText(snv,sn.value);iv.textContent=ir.value;bv.textContent=br.value;bdv.textContent=bd.value+'s';cdv.textContent=cd.value+'s';fwv.textContent=fw.value+'ms'}"
+        "async function init(){cfg=await(await fetch('/api/config')).json();did.value=cfg.device_id;pi.value=cfg.pi_ip||'';pp.value=cfg.pi_port||3005;pa.value=cfg.pi_api_path||'/espdata';pt.value=Math.round((cfg.pi_post_interval_ms||5000)/1000);m.value=cfg.movement_threshold;se.value=cfg.settle_threshold;sn.value=cfg.motion_sensitivity;ir.value=cfg.idle_rate_hz;br.value=cfg.boost_rate_hz;bd.value=Math.round(cfg.boost_duration_ms/1000);cd.value=Math.round(cfg.cooldown_ms/1000);fw.value=cfg.feature_window_ms;didv.textContent=idLabel(did.value);refreshPi();ptv.textContent=pt.value+'s';setText(mv,m.value);setText(sv,se.value);setText(snv,sn.value);iv.textContent=ir.value;bv.textContent=br.value;bdv.textContent=bd.value+'s';cdv.textContent=cd.value+'s';fwv.textContent=fw.value+'ms';await loadCal()}"
         "function schedule(){clearTimeout(timer);timer=setTimeout(tick,Math.round(1000/Math.max(0.2,+gu.value)))}"
         "did.oninput=()=>didv.textContent=idLabel(did.value);pi.oninput=refreshPi;pp.oninput=refreshPi;pa.oninput=refreshPi;pt.oninput=()=>ptv.textContent=pt.value+'s';m.oninput=()=>{setText(mv,m.value);draw()};se.oninput=()=>{setText(sv,se.value);draw()};sn.oninput=()=>setText(snv,sn.value);ir.oninput=()=>iv.textContent=ir.value;br.oninput=()=>bv.textContent=br.value;bd.oninput=()=>bdv.textContent=bd.value+'s';cd.oninput=()=>cdv.textContent=cd.value+'s';fw.oninput=()=>fwv.textContent=fw.value+'ms';did.onchange=saveCfg;pi.onchange=saveCfg;pp.onchange=saveCfg;pa.onchange=saveCfg;pt.onchange=saveCfg;m.onchange=saveCfg;se.onchange=saveCfg;sn.onchange=saveCfg;ir.onchange=saveCfg;br.onchange=saveCfg;bd.onchange=saveCfg;cd.onchange=saveCfg;fw.onchange=saveCfg;gm.oninput=()=>{scoreMax=+gm.value;gmv.textContent=scoreMax;draw()};gr.oninput=()=>{rateMax=+gr.value;grv.textContent=rateMax;draw()};gu.oninput=()=>{guv.textContent=Number(gu.value).toFixed(1)+' Hz';schedule()};"
+        "savecal.onclick=saveCal;reloadcal.onclick=loadCal;"
         "cal.onclick=async()=>{cal.disabled=true;calmsg.textContent='Keep the area still for 10 seconds';await fetch('/api/calibrate',{method:'POST'})};"
-        "delcal.onclick=async()=>{delcal.disabled=true;calmsg.textContent='Calibration data deleted';msgUntil=Date.now()+3000;await fetch('/api/calibration',{method:'DELETE'});setTimeout(()=>delcal.disabled=false,1000)};"
+        "delcal.onclick=async()=>{delcal.disabled=true;calmsg.textContent='Calibration data deleted';msgUntil=Date.now()+3000;await fetch('/api/calibration',{method:'DELETE'});await loadCal();setTimeout(()=>delcal.disabled=false,1000)};"
         "async function tick(){if(busy){schedule();return}busy=true;try{const r=await fetch('/status.json');const s=await r.json();title.textContent=s.name+' '+s.ip;"
         "grid.innerHTML=keys.map(k=>'<div class=tile><div class=label>'+k+'</div><div class=value>'+fmt(k,s[k])+'</div></div>').join('');"
         "cal.disabled=!!s.calibrating;calmsg.textContent=s.calibrating?'Calibrating '+Math.ceil(s.calibration_remaining_ms/1000)+'s':(Date.now()<msgUntil?calmsg.textContent:'');"
-        "hist.push({m:s.movement_score,r:s.sample_rate_hz});if(hist.length>120)hist.shift();draw()}finally{busy=false;schedule()}}"
+        "if(calWas&&!s.calibrating)loadCal();calWas=!!s.calibrating;hist.push({m:s.movement_score,r:s.sample_rate_hz});if(hist.length>120)hist.shift();draw()}finally{busy=false;schedule()}}"
         "init().then(()=>{guv.textContent=Number(gu.value).toFixed(1)+' Hz';tick()})</script></main></body></html>";
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, page, HTTPD_RESP_USE_STRLEN);
@@ -1981,6 +2186,14 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t calibration_get_handler(httpd_req_t *req)
+{
+    cJSON *json = calibration_to_json();
+    esp_err_t err = send_json(req, json);
+    cJSON_Delete(json);
+    return err;
+}
+
 /**
  * Introduction:
  * Applies an optional numeric JSON property to an existing numeric value. The
@@ -1999,6 +2212,72 @@ static void apply_json_number(cJSON *root, const char *name, double *value)
     if (cJSON_IsNumber(item)) {
         *value = item->valuedouble;
     }
+}
+
+static esp_err_t calibration_post_handler(httpd_req_t *req)
+{
+    char body[MAX_POST_BODY];
+    if (read_request_body(req, body, sizeof(body)) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    calibration_data_t cal;
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    cal = g_calibration;
+    xSemaphoreGive(state_lock);
+
+    double value = cal.baseline_energy;
+    apply_json_number(root, "baseline_energy", &value);
+    cal.baseline_energy = (float)value;
+    value = cal.baseline_variance;
+    apply_json_number(root, "baseline_variance", &value);
+    cal.baseline_variance = (float)value;
+    value = cal.baseline_shape;
+    apply_json_number(root, "baseline_shape", &value);
+    cal.baseline_shape = (float)value;
+    value = cal.baseline_phase;
+    apply_json_number(root, "baseline_phase", &value);
+    cal.baseline_phase = (float)value;
+    value = cal.baseline_phase_variance;
+    apply_json_number(root, "baseline_phase_variance", &value);
+    cal.baseline_phase_variance = (float)value;
+    value = cal.baseline_noise;
+    apply_json_number(root, "baseline_noise", &value);
+    cal.baseline_noise = (float)value;
+    value = cal.baseline_phase_noise;
+    apply_json_number(root, "baseline_phase_noise", &value);
+    cal.baseline_phase_noise = (float)value;
+    value = cal.calibration_windows;
+    apply_json_number(root, "calibration_windows", &value);
+    cal.calibration_windows = value > 0.0 ? (uint32_t)value : 0;
+    cal.valid = true;
+    sanitize_calibration(&cal);
+
+    esp_err_t save_err = save_calibration(&cal);
+    if (save_err != ESP_OK) {
+        cJSON_Delete(root);
+        ESP_LOGE(TAG, "Failed to save calibration to NVS: %s", esp_err_to_name(save_err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save calibration");
+        return ESP_FAIL;
+    }
+
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    g_calibration = cal;
+    calibration_apply_requested = true;
+    g_status.baseline_started_us = esp_timer_get_time();
+    xSemaphoreGive(state_lock);
+    cJSON_Delete(root);
+
+    cJSON *reply = calibration_to_json();
+    esp_err_t err = send_json(req, reply);
+    cJSON_Delete(reply);
+    return err;
 }
 
 /**
@@ -2119,7 +2398,7 @@ static esp_err_t options_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
     return httpd_resp_send(req, NULL, 0);
 }
@@ -2165,11 +2444,16 @@ static esp_err_t calibrate_post_handler(httpd_req_t *req)
 static esp_err_t calibration_delete_handler(httpd_req_t *req)
 {
     calibration_delete_requested = true;
+    esp_err_t clear_err = clear_calibration();
     xSemaphoreTake(state_lock, portMAX_DELAY);
+    default_calibration(&g_calibration);
     g_status.calibrating = false;
     g_status.calibration_remaining_ms = 0;
     g_status.baseline_age_s = 0;
     xSemaphoreGive(state_lock);
+    if (clear_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to clear CSI calibration: %s", esp_err_to_name(clear_err));
+    }
     ESP_LOGI(TAG, "CSI calibration deletion requested");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"ok\":true,\"calibration_deleted\":true}");
@@ -2262,7 +2546,7 @@ static void start_http_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 14;
+    config.max_uri_handlers = 18;
 
     ESP_ERROR_CHECK(httpd_start(&http_server, &config));
 
@@ -2273,6 +2557,9 @@ static void start_http_server(void)
     httpd_uri_t config_post = {.uri = "/api/config", .method = HTTP_POST, .handler = config_post_handler};
     httpd_uri_t config_options = {.uri = "/api/config", .method = HTTP_OPTIONS, .handler = options_handler};
     httpd_uri_t calibrate = {.uri = "/api/calibrate", .method = HTTP_POST, .handler = calibrate_post_handler};
+    httpd_uri_t calibration_get = {.uri = "/api/calibration", .method = HTTP_GET, .handler = calibration_get_handler};
+    httpd_uri_t calibration_post = {.uri = "/api/calibration", .method = HTTP_POST, .handler = calibration_post_handler};
+    httpd_uri_t calibration_options = {.uri = "/api/calibration", .method = HTTP_OPTIONS, .handler = options_handler};
     httpd_uri_t calibration_delete = {.uri = "/api/calibration", .method = HTTP_DELETE, .handler = calibration_delete_handler};
     httpd_uri_t provision = {.uri = "/api/provision", .method = HTTP_POST, .handler = provision_post_handler};
     httpd_uri_t reset_wifi = {.uri = "/api/reset-wifi", .method = HTTP_POST, .handler = reset_wifi_post_handler};
@@ -2287,6 +2574,9 @@ static void start_http_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &config_post));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &config_options));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibrate));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_get));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_post));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_options));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_delete));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &provision));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &reset_wifi));
@@ -2324,6 +2614,9 @@ void app_main(void)
     ESP_ERROR_CHECK(csi_queue == NULL || state_lock == NULL || wifi_event_group == NULL ? ESP_ERR_NO_MEM : ESP_OK);
 
     config_needs_auto_name = load_config(&g_config) != ESP_OK;
+    if (load_calibration(&g_calibration) == ESP_OK && g_calibration.valid) {
+        ESP_LOGI(TAG, "Persisted CSI calibration loaded from NVS");
+    }
     csi_min_interval_us = g_config.idle_rate_hz > 0 ? 1000000LL / g_config.idle_rate_hz : 0;
     movement_led_init();
     memset(&g_status, 0, sizeof(g_status));

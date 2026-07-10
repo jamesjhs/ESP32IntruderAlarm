@@ -1,4 +1,4 @@
-const appConfig = window.ALARM_APP_CONFIG || { version: "0.0.1", build: null };
+const appConfig = window.ALARM_APP_CONFIG || { version: "0.2.1", build: null };
 const versionEl = document.querySelector("#version");
 const pwaStateEl = document.querySelector("#pwa-state");
 const workerStateEl = document.querySelector("#worker-state");
@@ -22,6 +22,7 @@ const nodeSettingsModalEl = document.querySelector("#node-settings-modal");
 const nodeSettingsTitleEl = document.querySelector("#node-settings-title");
 const nodeStatusDetailsEl = document.querySelector("#node-status-details");
 const nodeConfigFormEl = document.querySelector("#node-config-form");
+const nodeCalibrationFormEl = document.querySelector("#node-calibration-form");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
 const historyFromEl = document.querySelector("#history-from-hours");
 const historyToEl = document.querySelector("#history-to-hours");
@@ -95,11 +96,25 @@ const NODE_CONFIG_HELP = {
   feature_window_ms: "Feature aggregation window length used when scoring CSI changes."
 };
 
+const NODE_CALIBRATION_HELP = {
+  valid: "Whether this node has a persisted stillness baseline saved in ESP32 NVS.",
+  calibration_windows: "Number of feature windows averaged when the baseline was captured.",
+  baseline_energy: "Still-room average CSI energy used as the primary movement reference.",
+  baseline_variance: "Still-room CSI energy variance used to derive normal noise.",
+  baseline_shape: "Still-room subcarrier shape variation reference.",
+  baseline_phase: "Still-room phase-proxy reference.",
+  baseline_phase_variance: "Still-room phase-proxy variance reference.",
+  baseline_noise: "Minimum energy deviation divisor. Higher values make the baseline more forgiving.",
+  baseline_phase_noise: "Minimum phase deviation divisor. Higher values make phase scoring more forgiving."
+};
+
 const NODE_ACTION_HELP = {
   refreshNodeStatus: "Fetch the latest live status directly from this ESP32 node through the Pi.",
   calibrateNode: "Ask the ESP32 to record a fresh quiet baseline. Keep the area still while it runs.",
   deleteNodeCalibration: "Clear the node's saved baseline so it can learn a new one.",
-  saveNodeConfig: "Send these configuration values to the ESP32 node's /api/config endpoint."
+  saveNodeConfig: "Send these configuration values to the ESP32 node's /api/config endpoint.",
+  saveNodeCalibration: "Persist these calibration baseline values to the ESP32 node's NVS.",
+  reloadNodeCalibration: "Reload the calibration baseline currently saved on the ESP32 node."
 };
 
 let currentAdmin = null;
@@ -427,12 +442,23 @@ function attachNodeSettingsHelp() {
     }
   }
 
+  for (const [name, help] of Object.entries(NODE_CALIBRATION_HELP)) {
+    const input = nodeCalibrationFormEl.elements[name];
+    const label = input?.closest("label");
+    if (label && !label.querySelector(".hover-help")) {
+      appendHelp(label, help);
+      input.title = help;
+    }
+  }
+
   const actions = [
     ["#close-node-settings", "Close this ESP32 node settings window."],
     ["#refresh-node-status", NODE_ACTION_HELP.refreshNodeStatus],
     ["#calibrate-node", NODE_ACTION_HELP.calibrateNode],
     ["#delete-node-calibration", NODE_ACTION_HELP.deleteNodeCalibration],
-    ['#node-config-form button[type="submit"]', NODE_ACTION_HELP.saveNodeConfig]
+    ['#node-config-form button[type="submit"]', NODE_ACTION_HELP.saveNodeConfig],
+    ['#node-calibration-form button[type="submit"]', NODE_ACTION_HELP.saveNodeCalibration],
+    ["#reload-node-calibration", NODE_ACTION_HELP.reloadNodeCalibration]
   ];
   for (const [selector, help] of actions) {
     const button = document.querySelector(selector);
@@ -515,6 +541,19 @@ function populateNodeConfigForm(config) {
   setFormNumber(nodeConfigFormEl, "feature_window_ms", config.feature_window_ms);
 }
 
+function populateNodeCalibrationForm(calibration) {
+  attachNodeSettingsHelp();
+  nodeCalibrationFormEl.elements.valid.value = calibration.valid ? "yes" : "no";
+  setFormNumber(nodeCalibrationFormEl, "calibration_windows", calibration.calibration_windows ?? 0);
+  setFormDecimal(nodeCalibrationFormEl, "baseline_energy", calibration.baseline_energy, 6);
+  setFormDecimal(nodeCalibrationFormEl, "baseline_variance", calibration.baseline_variance, 6);
+  setFormDecimal(nodeCalibrationFormEl, "baseline_shape", calibration.baseline_shape, 6);
+  setFormDecimal(nodeCalibrationFormEl, "baseline_phase", calibration.baseline_phase, 6);
+  setFormDecimal(nodeCalibrationFormEl, "baseline_phase_variance", calibration.baseline_phase_variance, 6);
+  setFormDecimal(nodeCalibrationFormEl, "baseline_noise", calibration.baseline_noise, 6);
+  setFormDecimal(nodeCalibrationFormEl, "baseline_phase_noise", calibration.baseline_phase_noise, 6);
+}
+
 function nodeConfigPayload() {
   const form = new FormData(nodeConfigFormEl);
   const apiPath = String(form.get("pi_api_path") || "/espdata").trim();
@@ -536,10 +575,31 @@ function nodeConfigPayload() {
   };
 }
 
+function nodeCalibrationPayload() {
+  const form = new FormData(nodeCalibrationFormEl);
+  return {
+    calibration_windows: Number(form.get("calibration_windows")),
+    baseline_energy: Number(form.get("baseline_energy")),
+    baseline_variance: Number(form.get("baseline_variance")),
+    baseline_shape: Number(form.get("baseline_shape")),
+    baseline_phase: Number(form.get("baseline_phase")),
+    baseline_phase_variance: Number(form.get("baseline_phase_variance")),
+    baseline_noise: Number(form.get("baseline_noise")),
+    baseline_phase_noise: Number(form.get("baseline_phase_noise"))
+  };
+}
+
 async function refreshSelectedNodeStatus() {
   if (selectedNodeDeviceId === null) return;
   const status = await readJson(`/api/nodes/${selectedNodeDeviceId}/status`);
   renderNodeStatus(status);
+}
+
+async function refreshSelectedNodeCalibration() {
+  if (selectedNodeDeviceId === null) return null;
+  const calibration = await readJson(`/api/nodes/${selectedNodeDeviceId}/calibration`);
+  populateNodeCalibrationForm(calibration);
+  return calibration;
 }
 
 async function openNodeSettings(deviceId) {
@@ -559,6 +619,10 @@ async function openNodeSettings(deviceId) {
     await refreshSelectedNodeStatus();
   });
 
+  await runNodeAction(async () => {
+    await refreshSelectedNodeCalibration();
+  });
+
   if (config) {
     setNodeSettingsMessage("Settings loaded.");
   }
@@ -569,6 +633,7 @@ function closeNodeSettings() {
   selectedNodeDeviceId = null;
   nodeStatusDetailsEl.replaceChildren();
   nodeConfigFormEl.reset();
+  nodeCalibrationFormEl.reset();
   setNodeSettingsMessage("");
 }
 
@@ -936,6 +1001,7 @@ document.querySelector("#delete-node-calibration").addEventListener("click", asy
   await runNodeAction(async () => {
     await readJson(`/api/nodes/${selectedNodeDeviceId}/calibration`, { method: "DELETE" });
     await refreshSelectedNodeStatus();
+    await refreshSelectedNodeCalibration();
   }, "Calibration deleted.");
 });
 
@@ -947,6 +1013,21 @@ nodeConfigFormEl.addEventListener("submit", async (event) => {
     await refreshSelectedNodeStatus();
     await refreshStatus();
   }, "Configuration saved to ESP32.");
+});
+
+document.querySelector("#reload-node-calibration").addEventListener("click", async () => {
+  await runNodeAction(async () => {
+    await refreshSelectedNodeCalibration();
+  }, "Calibration reloaded.");
+});
+
+nodeCalibrationFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await runNodeAction(async () => {
+    const saved = await postJson(`/api/nodes/${selectedNodeDeviceId}/calibration`, nodeCalibrationPayload());
+    populateNodeCalibrationForm(saved);
+    await refreshSelectedNodeStatus();
+  }, "Calibration saved to ESP32 NVS.");
 });
 
 document.querySelector("#generate-vapid").addEventListener("click", async () => {

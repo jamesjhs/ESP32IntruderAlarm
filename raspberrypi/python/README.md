@@ -1,6 +1,6 @@
 # Python ESP32 Telemetry Worker
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 The Python worker receives compact telemetry from ESP32 CSI nodes on LAN port
 `3005` at `/espdata`. It keeps live node state in memory, exposes internal

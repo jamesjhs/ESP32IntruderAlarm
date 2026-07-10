@@ -1,6 +1,6 @@
 # PWA How-To Guides
 
-Version: `0.0.1`
+Version: `0.2.1`
 
 ## How To Check The Version API
 
@@ -14,6 +14,14 @@ Start the Python worker, then run:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:3015/api/status
+```
+
+## How To Check A Node's Persisted Calibration Through The PWA
+
+Replace `0` with the ESP32 `device_id`:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:3015/api/nodes/0/calibration
 ```
 
 ## How To Build For Production
@@ -54,8 +62,9 @@ not the real Android install target.
 3. Confirm the **Push support** row shows `available`, `granted`, or `denied`.
 4. If it shows `denied`, reset notification permission in Android site settings.
 
-Full push delivery also requires VAPID keys, authenticated subscription storage,
-and a server-side push sender. Those are documented in
+Full push delivery also requires VAPID keys, browser permission, at least one
+stored subscription, and outbound HTTPS access from the Pi to push relay
+services. Those are documented in
 `docs/PWA_PUSH_REQUIREMENTS_ASSESSMENT.md`.
 
 ## How To Test A Service Worker Push In DevTools
