@@ -491,6 +491,16 @@ export function buildServer() {
     return { ok: true };
   });
 
+  server.post<{ Params: { id: string }; Body: { name?: string } }>("/api/admin/nodes/:id/name", async (request, reply) => {
+    const name = String(request.body?.name ?? "").trim();
+    if (!name) {
+      reply.code(400);
+      return { ok: false, error: "name is required" };
+    }
+    db.renameNode(Number(request.params.id), name);
+    return { ok: true };
+  });
+
   server.post<{ Body: SecuritySettings }>("/api/admin/security", async (request) => {
     db.saveSecuritySettings(request.body);
     return { ok: true, security: db.getSecuritySettings() };

@@ -158,7 +158,7 @@ h3 {
 }
 
 .movement-history {
-  margin-top: 16px;
+  margin-bottom: 16px;
 }
 
 .chart-header,
@@ -370,6 +370,10 @@ dd {
 
 .node-settings-button {
   white-space: nowrap;
+}
+
+.node-name-input {
+  font-weight: 700;
 }
 
 .record-grid {

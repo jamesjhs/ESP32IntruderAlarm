@@ -481,6 +481,11 @@ export class AlarmDatabase {
     this.audit("node.active", `node:${id}`, { active });
   }
 
+  renameNode(id: number, name: string) {
+    this.db.prepare("UPDATE nodes SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(name, id);
+    this.audit("node.rename", `node:${id}`, { name });
+  }
+
   createEvent(input: { type: string; severity: string; title: string; body?: string; metadata?: unknown }) {
     const info = this.db
       .prepare("INSERT INTO events (type, severity, title, body, metadata_json) VALUES (?, ?, ?, ?, ?)")

@@ -269,7 +269,15 @@ function renderNodes(nodes) {
       const payload = node.payload || {};
       const registryNode = nodeRecordFor(node.device_id);
       item.className = nodeHasMovement(payload) ? "node movement" : "node";
-      appendText(item, "strong", String(node.name ?? "Unnamed node"));
+
+      const nameInput = document.createElement("input");
+      nameInput.className = "node-name-input";
+      nameInput.value = String(registryNode?.name || node.name || "Unnamed node");
+      nameInput.dataset.nodeRecordId = registryNode ? String(registryNode.id) : "";
+      nameInput.disabled = !registryNode;
+      nameInput.title = "Friendly display name for this ESP32 node.";
+      item.appendChild(nameInput);
+
       appendText(item, "span", `ID ${node.device_id} · ${node.state}`);
       appendText(item, "span", String(node.ip ?? ""));
       appendText(item, "span", `Score ${formatScore(payload.movement_score)}`);
@@ -625,7 +633,8 @@ function drawChart(canvas, samples, options = {}) {
   const fromTime = now - fromHours * 3600000;
   const toTime = now - toHours * 3600000;
   const points = pointsForSamples(samples, now, fromHours, toHours);
-  const yMax = Math.max(10, movementTrigger.threshold, ...points.map((point) => Number(point.score) || 0));
+  const visibleMax = Math.max(0, ...points.map((point) => Number(point.score) || 0));
+  const yMax = Math.max(0.5, visibleMax, options.triggerLine ? movementTrigger.threshold : 0) * 1.15;
   const x = (time) => padding.left + ((time - fromTime) / Math.max(1, toTime - fromTime)) * innerWidth;
   const y = (score) => padding.top + innerHeight - (Number(score) / yMax) * innerHeight;
 
@@ -755,7 +764,8 @@ async function refreshMovementHistory() {
 
 async function refreshMovementTrigger() {
   movementTrigger = await readJson("/api/history/movement/trigger");
-  triggerLevelEl.value = String(movementTrigger.threshold);
+  triggerLevelEl.max = "30";
+  triggerLevelEl.value = String(Math.min(30, Number(movementTrigger.threshold) || 3));
   triggerLevelLabelEl.textContent = Number(movementTrigger.threshold).toFixed(2);
   triggerEnabledEl.checked = Boolean(movementTrigger.enabled);
   renderMovementCharts();
@@ -855,6 +865,31 @@ nodesEl.addEventListener("change", async (event) => {
     await postJson(`/api/admin/nodes/${checkbox.dataset.nodeRecordId}/active`, { active: checkbox.checked });
     await refreshAdmin();
   }, "Node active state saved.");
+});
+
+async function saveNodeFriendlyName(input) {
+  if (!input.dataset.nodeRecordId) return;
+  const name = input.value.trim();
+  if (!name) {
+    input.value = "Unnamed node";
+  }
+  await runAction(async () => {
+    await postJson(`/api/admin/nodes/${input.dataset.nodeRecordId}/name`, { name: input.value.trim() || "Unnamed node" });
+    await refreshAdmin();
+  }, "Node name saved.");
+}
+
+nodesEl.addEventListener("focusout", async (event) => {
+  if (!event.target.classList?.contains("node-name-input")) return;
+  await saveNodeFriendlyName(event.target);
+});
+
+nodesEl.addEventListener("keydown", async (event) => {
+  if (!event.target.classList?.contains("node-name-input")) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.target.blur();
+  }
 });
 
 nodesEl.addEventListener("click", async (event) => {

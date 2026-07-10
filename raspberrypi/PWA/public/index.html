@@ -80,29 +80,10 @@
         <span id="version" class="badge">0.0.1</span>
       </section>
 
-      <section class="status-grid" aria-live="polite">
-        <article class="panel">
-          <h2>System</h2>
-          <dl>
-            <div><dt>PWA service</dt><dd id="pwa-state">checking</dd></div>
-            <div><dt>Worker</dt><dd id="worker-state">checking</dd></div>
-            <div><dt>Service worker</dt><dd id="sw-state">checking</dd></div>
-            <div><dt>Push support</dt><dd id="push-state">checking</dd></div>
-            <div><dt>Known nodes</dt><dd id="known-nodes">0</dd></div>
-            <div><dt>Healthy nodes</dt><dd id="healthy-nodes">0</dd></div>
-          </dl>
-        </article>
-
-        <article class="panel">
-          <h2>ESP32 Nodes</h2>
-          <div id="nodes" class="nodes empty">No node telemetry yet.</div>
-        </article>
-      </section>
-
-      <section id="movement-history" class="panel movement-history">
+      <details id="movement-history" class="panel collapsible movement-history" open>
+        <summary><h2>Movement Score History</h2></summary>
         <div class="chart-header">
           <div>
-            <h2>Movement Score History</h2>
             <p id="history-range-label" class="message">Showing recent movement scores.</p>
           </div>
           <div class="history-controls">
@@ -118,7 +99,7 @@
 
         <div class="trigger-control">
           <label>Trigger level <output id="trigger-level-label">3.00</output></label>
-          <input id="trigger-level" type="range" min="0" max="10" step="0.01" value="3">
+          <input id="trigger-level" type="range" min="0" max="30" step="0.01" value="3">
           <label class="node-active"><input id="trigger-enabled" type="checkbox" checked> Push alerts</label>
         </div>
 
@@ -127,6 +108,25 @@
           <canvas id="aggregate-chart" height="180"></canvas>
         </article>
         <div id="node-charts" class="node-charts"></div>
+      </details>
+
+      <section class="status-grid" aria-live="polite">
+        <article class="panel">
+          <h2>System</h2>
+          <dl>
+            <div><dt>PWA service</dt><dd id="pwa-state">checking</dd></div>
+            <div><dt>Worker</dt><dd id="worker-state">checking</dd></div>
+            <div><dt>Service worker</dt><dd id="sw-state">checking</dd></div>
+            <div><dt>Push support</dt><dd id="push-state">checking</dd></div>
+            <div><dt>Known nodes</dt><dd id="known-nodes">0</dd></div>
+            <div><dt>Healthy nodes</dt><dd id="healthy-nodes">0</dd></div>
+          </dl>
+        </article>
+
+        <details class="panel collapsible">
+          <summary><h2>ESP32 Nodes</h2></summary>
+          <div id="nodes" class="nodes empty">No node telemetry yet.</div>
+        </details>
       </section>
 
       <section class="admin-grid">
