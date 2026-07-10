@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { config as loadDotenv } from "dotenv";
 
@@ -15,9 +16,13 @@ export interface AppConfig {
   vapidSubject: string;
 }
 
+function loadVersion(): string {
+  return fs.readFileSync(path.resolve(__dirname, "..", "..", "VERSION"), "utf8").trim();
+}
+
 export function loadConfig(): AppConfig {
   return {
-    version: process.env.APP_VERSION ?? "0.2.1",
+    version: loadVersion(),
     build: process.env.APP_BUILD ?? null,
     host: process.env.PWA_HOST ?? "127.0.0.1",
     port: Number(process.env.PWA_PORT ?? "3015"),

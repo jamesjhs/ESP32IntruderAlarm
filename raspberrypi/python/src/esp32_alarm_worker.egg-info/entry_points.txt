@@ -1,2 +1,0 @@
-[console_scripts]
-esp32-alarm-worker = esp32_alarm_worker.server:main

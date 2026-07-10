@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esp32-alarm-worker"
-version = "0.2.1"
+dynamic = ["version"]
 description = "Raspberry Pi ESP32 telemetry worker for ESP32IntruderAlarm"
 requires-python = ">=3.9"
 dependencies = [
@@ -18,3 +18,6 @@ esp32-alarm-worker = "esp32_alarm_worker.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "esp32_alarm_worker.__version__"}

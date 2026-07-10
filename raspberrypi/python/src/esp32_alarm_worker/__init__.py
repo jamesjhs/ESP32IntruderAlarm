@@ -1,9 +1,11 @@
 """ESP32 Alarm Python worker package.
 
 This package contains the LAN-facing telemetry receiver used by the Raspberry Pi
-side of ESP32IntruderAlarm. The package version is kept in sync with the wider
-prototype version so health endpoints, package metadata, and the PWA can report
-one coherent release number.
+side of ESP32IntruderAlarm. The package version is read from the shared
+`raspberrypi/VERSION` file so health endpoints, package metadata, and the PWA
+can report one coherent release number without duplicating it in source.
 """
 
-__version__ = "0.2.1"
+from ._version import read_shared_version
+
+__version__ = read_shared_version()

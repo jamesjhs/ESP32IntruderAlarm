@@ -21,6 +21,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from ._version import read_shared_version
+
 
 def _load_env() -> None:
     """Load the shared Raspberry Pi `.env` file if it exists."""
@@ -60,7 +62,7 @@ def load_config() -> WorkerConfig:
         telemetry_path = f"/{telemetry_path}"
 
     return WorkerConfig(
-        version=os.getenv("APP_VERSION", "0.2.1"),
+        version=read_shared_version(),
         host=os.getenv("WORKER_HOST", "0.0.0.0"),
         port=int(os.getenv("WORKER_PORT", "3005")),
         telemetry_path=telemetry_path,
