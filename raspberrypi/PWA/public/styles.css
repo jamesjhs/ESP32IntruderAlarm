@@ -388,6 +388,17 @@ dd {
   color: #53606f;
 }
 
+.node-link {
+  color: #2f6fed;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.node-link:hover,
+.node-link:focus {
+  text-decoration: underline;
+}
+
 .record span,
 .record small,
 .record-grid small {

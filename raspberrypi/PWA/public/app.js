@@ -278,7 +278,17 @@ function renderNodes(nodes) {
       nameInput.title = "Friendly display name for this ESP32 node.";
       item.appendChild(nameInput);
 
-      appendText(item, "span", `ID ${node.device_id} · ${node.state}`);
+      const nodeLink = document.createElement("a");
+      nodeLink.className = "node-link";
+      nodeLink.href = node.ip ? `http://${node.ip}` : "#";
+      nodeLink.target = "_blank";
+      nodeLink.rel = "noopener noreferrer";
+      nodeLink.textContent = `ID ${node.device_id} · ${node.state}`;
+      nodeLink.title = node.ip ? `Open this ESP32 node at http://${node.ip}` : "Node IP unavailable";
+      if (!node.ip) {
+        nodeLink.addEventListener("click", (event) => event.preventDefault());
+      }
+      item.appendChild(nodeLink);
       appendText(item, "span", String(node.ip ?? ""));
       appendText(item, "span", `Score ${formatScore(payload.movement_score)}`);
 
