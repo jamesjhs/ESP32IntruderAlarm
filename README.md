@@ -100,6 +100,50 @@ emits steady UDP broadcast frames that receiver nodes can hear directly and
 filter by source MAC. The sender is not a clock synchronizer; it is a stable,
 known packet source that makes the receiver-side CSI experiment more repeatable.
 
+## Physical Placement And Environmental Constraints
+
+CSI movement sensing is highly dependent on the physical radio channel between a
+sender and receiver. The system does not simply detect "motion in a room"; it
+detects changes in the multipath Wi-Fi field between known devices. The best
+installation is therefore one where the radio path is stable when the room is
+still, but human movement causes a measurable disturbance.
+
+For the current three-ESP32 topology, start with one dedicated sender and two
+receiver nodes on the same 2.4 GHz Wi-Fi channel. A good first layout is a
+shallow triangle around the monitored area:
+
+- Sender-to-receiver distance: start around 3 m.
+- Normal practical range: roughly 2-6 m in a domestic room.
+- Avoid very short links below about 1 m because they can be dominated by
+  near-field effects, antenna orientation, body blocking, and gain changes.
+- Treat links above about 8-10 m, or links through multiple walls, as advanced
+  experiments that need more calibration and validation.
+- Receiver-to-receiver distance: roughly 2-5 m, with receivers placed at
+  meaningfully different angles rather than side-by-side.
+
+Place the ESP32 boards at about waist to chest height, with consistent antenna
+orientation, and keep them fixed after calibration. Do not press boards against
+metal, radiators, TVs, large appliances, mirrors, foil-backed insulation, dense
+electronics, or the router itself. Cables, enclosures, nearby furniture, and
+rotating a board can all change the baseline enough to matter.
+
+The most likely environmental disruptors are moving reflectors and variable
+2.4 GHz transmitters. People, pets, doors, curtains, fans, robot vacuums,
+washing machines, metallic blinds, and large water-filled objects can all
+change the channel. Wi-Fi disruption can come from neighbouring routers,
+Bluetooth-heavy areas, microwave ovens, router auto-channel changes, band
+steering, and mixed packets from many source MAC addresses. This is why the
+dedicated sender and receiver-side source-MAC filtering are preferred over
+depending only on ordinary household/router traffic.
+
+For repeatable tests, keep the router's 2.4 GHz channel fixed if possible,
+provision the sender and receivers onto the same 2.4 GHz network, start the
+sender at the intended packet rate, then calibrate while the space is still and
+in its normal state. Doors, fans, heating, curtains, and large movable objects
+should be in their usual positions during calibration. Calibration should be a
+deliberate user action, not something that automatically happens after power
+loss while someone may be moving nearby.
+
 ## Project Goals
 
 ### Goal 1: Single ESP32 CSI Proof of Concept

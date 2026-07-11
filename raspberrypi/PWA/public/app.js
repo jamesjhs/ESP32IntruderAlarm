@@ -45,9 +45,11 @@ const eventsListEl = document.querySelector("#events-list");
 const auditListEl = document.querySelector("#audit-list");
 const nodeSettingsModalEl = document.querySelector("#node-settings-modal");
 const nodeSettingsTitleEl = document.querySelector("#node-settings-title");
+const nodeStatusTitleEl = document.querySelector("#node-status-title");
 const nodeStatusDetailsEl = document.querySelector("#node-status-details");
 const nodeConfigFormEl = document.querySelector("#node-config-form");
 const nodeCalibrationFormEl = document.querySelector("#node-calibration-form");
+const nodeCalibrationPanelEl = document.querySelector("#node-calibration-panel");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
 const historyFromEl = document.querySelector("#history-from-hours");
 const historyToEl = document.querySelector("#history-to-hours");
@@ -97,6 +99,22 @@ const SECURITY_LABELS = {
 };
 
 const NODE_STATUS_HELP = {
+  role: "Firmware role reported by the ESP32: receiver or dedicated CSI sender.",
+  ip: "Current LAN IP address reported by the ESP32.",
+  sta_mac: "Station MAC address of the ESP32. Receivers use the sender MAC for source filtering.",
+  enabled: "Whether the dedicated sender is currently emitting broadcast stimulus packets.",
+  sta_connected: "Whether the ESP32 station interface is connected to Wi-Fi.",
+  wifi_provisioned: "Whether Wi-Fi credentials have been saved on this ESP32.",
+  packet_rate_hz: "Configured sender UDP broadcast packet cadence.",
+  udp_port: "UDP destination port used by sender stimulus packets.",
+  payload_size: "Number of bytes in each sender stimulus packet.",
+  broadcast_ip: "Broadcast address used by the dedicated sender.",
+  packets_sent: "Total stimulus packets sent since boot.",
+  send_errors: "Sender packet send failures since boot.",
+  last_send_ms: "Sender uptime in milliseconds when the last packet was sent.",
+  channel: "Current 2.4 GHz Wi-Fi primary channel.",
+  secondary_channel: "Current Wi-Fi secondary channel reported by ESP-IDF.",
+  uptime_ms: "Milliseconds since this ESP32 booted.",
   sensing_state: "Current firmware sensing mode: idle, boost, or cooldown.",
   sample_rate_hz: "Current target CSI sampling rate selected by the ESP32 sensing state.",
   accepted_csi_rate_hz: "CSI packets accepted into feature processing per second after filtering/throttling.",
@@ -121,6 +139,7 @@ const NODE_CONFIG_HELP = {
   pi_ip: "LAN IP address of the Raspberry Pi telemetry receiver.",
   pi_port: "Port on the Pi worker that accepts ESP32 telemetry posts.",
   pi_api_path: "HTTP path on the Pi worker for telemetry, normally /espdata.",
+  sta_mac: "Read-only sender station MAC. Copy this to receiver CSI sender MAC fields when source filtering is used.",
   csi_source_mac: "Optional MAC address of the dedicated ESP32 CSI sender. When filtering is enabled, other source MACs are ignored.",
   csi_source_filter_enabled: "Only score CSI frames from the configured sender MAC.",
   enabled: "Sender-only: turn steady CSI stimulus packets on or off.",
@@ -336,6 +355,27 @@ function setCalibrationControlsDisabled(disabled) {
     if (element) {
       element.disabled = disabled;
     }
+  }
+}
+
+/** Returns the first known dedicated sender MAC when the topology is unambiguous. */
+function detectedSenderMac() {
+  const senderMacs = lastStatusNodes
+    .map((node) => node.payload)
+    .filter((payload) => payload?.role === "csi_sender" && payload.sta_mac)
+    .map((payload) => String(payload.sta_mac).trim())
+    .filter(Boolean);
+  return senderMacs.length === 1 ? senderMacs[0] : "";
+}
+
+/** Shows only controls that make sense for the selected ESP32 role. */
+function setNodeSettingsRole(role) {
+  const isSender = role === "csi_sender";
+  nodeStatusTitleEl.textContent = isSender ? "Sender Status" : "Receiver Status";
+  nodeCalibrationPanelEl.classList.toggle("hidden", isSender);
+  for (const label of nodeConfigFormEl.querySelectorAll("[data-config-role]")) {
+    const targetRole = label.dataset.configRole;
+    label.classList.toggle("hidden", targetRole !== "all" && targetRole !== (isSender ? "sender" : "receiver"));
   }
 }
 
@@ -617,7 +657,7 @@ function renderRecords(target, records, emptyText) {
 
 /** Renders the selected ESP32 node's live status fields in the modal. */
 function renderNodeStatus(status) {
-  const keys = [
+  const receiverKeys = [
     "sensing_state",
     "sample_rate_hz",
     "accepted_csi_rate_hz",
@@ -635,6 +675,28 @@ function renderNodeStatus(status) {
     "last_packet_ms",
     "calibrating"
   ];
+  const senderKeys = [
+    "role",
+    "sta_mac",
+    "ip",
+    "enabled",
+    "sta_connected",
+    "wifi_provisioned",
+    "packet_rate_hz",
+    "udp_port",
+    "payload_size",
+    "broadcast_ip",
+    "packets_sent",
+    "send_errors",
+    "last_send_ms",
+    "channel",
+    "secondary_channel",
+    "uptime_ms"
+  ];
+  const keys = selectedNodeRole === "csi_sender" ? senderKeys : receiverKeys;
+  if (selectedNodeRole === "csi_sender" && nodeConfigFormEl.elements.sta_mac) {
+    nodeConfigFormEl.elements.sta_mac.value = status?.sta_mac ?? "";
+  }
   nodeStatusDetailsEl.replaceChildren(
     ...keys.map((key) => {
       const row = document.createElement("div");
@@ -663,10 +725,12 @@ function populateNodeConfigForm(config) {
   attachNodeSettingsHelp();
   nodeConfigFormEl.elements.device_id.value = config.device_id ?? "";
   nodeConfigFormEl.elements.name.value = config.name ?? "";
+  nodeConfigFormEl.elements.sta_mac.value = config.sta_mac ?? "";
   nodeConfigFormEl.elements.pi_ip.value = config.pi_ip ?? "";
   setFormNumber(nodeConfigFormEl, "pi_port", config.pi_port ?? 3005);
   nodeConfigFormEl.elements.pi_api_path.value = config.pi_api_path ?? "/espdata";
-  nodeConfigFormEl.elements.csi_source_mac.value = config.csi_source_mac ?? "";
+  const sourceMac = config.csi_source_mac || (selectedNodeRole === "csi_receiver" ? detectedSenderMac() : "");
+  nodeConfigFormEl.elements.csi_source_mac.value = sourceMac;
   nodeConfigFormEl.elements.csi_source_filter_enabled.checked = Boolean(config.csi_source_filter_enabled);
   nodeConfigFormEl.elements.enabled.checked = Boolean(config.enabled);
   setFormNumber(nodeConfigFormEl, "packet_rate_hz", config.packet_rate_hz);
@@ -702,20 +766,30 @@ function populateNodeCalibrationForm(calibration) {
 function nodeConfigPayload() {
   const form = new FormData(nodeConfigFormEl);
   const apiPath = String(form.get("pi_api_path") || "/espdata").trim();
-  return {
+  const common = {
     device_id: Number(form.get("device_id")),
     name: String(form.get("name") || "").trim(),
     pi_ip: String(form.get("pi_ip") || "").trim(),
     pi_port: Number(form.get("pi_port")),
     pi_api_path: apiPath.startsWith("/") ? apiPath : `/${apiPath}`,
+    pi_post_interval_ms: Number(form.get("pi_post_interval_s")) * 1000
+  };
+
+  if (selectedNodeRole === "csi_sender") {
+    return {
+      ...common,
+      enabled: form.get("enabled") === "on",
+      packet_rate_hz: Number(form.get("packet_rate_hz")),
+      udp_port: Number(form.get("udp_port")),
+      payload_size: Number(form.get("payload_size")),
+      broadcast_ip: String(form.get("broadcast_ip") || "").trim()
+    };
+  }
+
+  return {
+    ...common,
     csi_source_mac: String(form.get("csi_source_mac") || "").trim(),
     csi_source_filter_enabled: form.get("csi_source_filter_enabled") === "on",
-    enabled: form.get("enabled") === "on",
-    packet_rate_hz: Number(form.get("packet_rate_hz")),
-    udp_port: Number(form.get("udp_port")),
-    payload_size: Number(form.get("payload_size")),
-    broadcast_ip: String(form.get("broadcast_ip") || "").trim(),
-    pi_post_interval_ms: Number(form.get("pi_post_interval_s")) * 1000,
     idle_rate_hz: Number(form.get("idle_rate_hz")),
     boost_rate_hz: Number(form.get("boost_rate_hz")),
     movement_threshold: truncateToDecimals(form.get("movement_threshold"), 2),
@@ -767,7 +841,11 @@ async function openNodeSettings(deviceId) {
   const liveNode = lastStatusNodes.find((node) => Number(node.device_id) === selectedNodeDeviceId);
   selectedNodeRole = liveNode?.payload?.role === "csi_sender" ? "csi_sender" : "csi_receiver";
   nodeSettingsTitleEl.textContent = liveNode ? `${liveNode.name} Settings` : `Node ${selectedNodeDeviceId} Settings`;
+  setNodeSettingsRole(selectedNodeRole);
   setCalibrationControlsDisabled(selectedNodeRole === "csi_sender");
+  if (selectedNodeRole === "csi_sender" && nodeConfigFormEl.elements.sta_mac) {
+    nodeConfigFormEl.elements.sta_mac.value = liveNode?.payload?.sta_mac ?? "";
+  }
   setNodeSettingsMessage("Loading node settings...");
   nodeSettingsModalEl.classList.remove("hidden");
 
@@ -800,6 +878,7 @@ function closeNodeSettings() {
   nodeSettingsModalEl.classList.add("hidden");
   selectedNodeDeviceId = null;
   selectedNodeRole = "csi_receiver";
+  setNodeSettingsRole(selectedNodeRole);
   setCalibrationControlsDisabled(false);
   nodeStatusDetailsEl.replaceChildren();
   nodeConfigFormEl.reset();

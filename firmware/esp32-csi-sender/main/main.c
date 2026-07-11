@@ -41,9 +41,12 @@
 #define SENDER_LED_GPIO GPIO_NUM_2
 #define SENDER_LED_ON_LEVEL 1
 #define SENDER_LED_OFF_LEVEL 0
+#define SENDER_LED_FLASH_ON_MS 80
+#define SENDER_LED_FLASH_INTERVAL_MS 1000
 #define HTTP_TASK_STACK 4096
 #define SENDER_TASK_STACK 4096
 #define TELEMETRY_TASK_STACK 4096
+#define LED_TASK_STACK 2048
 
 typedef struct {
     int32_t device_id;
@@ -622,7 +625,6 @@ static void sender_task(void *arg)
             if (sent > 0) {
                 g_status.packets_sent++;
                 g_status.last_send_ms = (uint32_t)((esp_timer_get_time() - g_status.boot_us) / 1000LL);
-                gpio_set_level(SENDER_LED_GPIO, (g_status.packets_sent & 1U) ? SENDER_LED_ON_LEVEL : SENDER_LED_OFF_LEVEL);
             } else {
                 g_status.send_errors++;
             }
@@ -633,6 +635,27 @@ static void sender_task(void *arg)
             xSemaphoreGive(state_lock);
         }
         vTaskDelay(pdMS_TO_TICKS(1000 / cfg.packet_rate_hz));
+    }
+}
+
+static void sender_led_task(void *arg)
+{
+    (void)arg;
+    while (true) {
+        bool should_flash;
+        xSemaphoreTake(state_lock, portMAX_DELAY);
+        should_flash = g_config.enabled && g_status.sta_connected;
+        xSemaphoreGive(state_lock);
+
+        if (should_flash) {
+            gpio_set_level(SENDER_LED_GPIO, SENDER_LED_ON_LEVEL);
+            vTaskDelay(pdMS_TO_TICKS(SENDER_LED_FLASH_ON_MS));
+            gpio_set_level(SENDER_LED_GPIO, SENDER_LED_OFF_LEVEL);
+            vTaskDelay(pdMS_TO_TICKS(SENDER_LED_FLASH_INTERVAL_MS - SENDER_LED_FLASH_ON_MS));
+        } else {
+            gpio_set_level(SENDER_LED_GPIO, SENDER_LED_OFF_LEVEL);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
     }
 }
 
@@ -820,6 +843,7 @@ void app_main(void)
     init_wifi();
     start_http_server();
     xTaskCreate(sender_task, "csi_sender", SENDER_TASK_STACK, NULL, 5, NULL);
+    xTaskCreate(sender_led_task, "sender_led", LED_TASK_STACK, NULL, 3, NULL);
     xTaskCreate(telemetry_task, "sender_telemetry", TELEMETRY_TASK_STACK, NULL, 4, NULL);
     ESP_LOGI(TAG, "ESP32 CSI sender ready, STA MAC %s", g_status.sta_mac);
 }
