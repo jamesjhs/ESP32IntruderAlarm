@@ -50,6 +50,7 @@ const nodeStatusDetailsEl = document.querySelector("#node-status-details");
 const nodeConfigFormEl = document.querySelector("#node-config-form");
 const nodeMacHistogramPanelEl = document.querySelector("#node-mac-histogram-panel");
 const nodeMacHistogramEl = document.querySelector("#node-mac-histogram");
+const nodeSourceMacDiagnosticsEl = document.querySelector("#node-source-mac-diagnostics");
 const nodeCalibrationFormEl = document.querySelector("#node-calibration-form");
 const nodeCalibrationPanelEl = document.querySelector("#node-calibration-panel");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
@@ -685,6 +686,35 @@ function renderMacHistogram(status) {
   );
 }
 
+function renderSourceMacDiagnostics(status) {
+  const diagnostics = status?.csi_source_mac_diagnostics;
+  if (!diagnostics) {
+    nodeSourceMacDiagnosticsEl.className = "source-mac-diagnostics";
+    nodeSourceMacDiagnosticsEl.replaceChildren();
+    return;
+  }
+
+  const items = [
+    ["Configured source", diagnostics.mac || "unset"],
+    ["Filter", diagnostics.filter_enabled ? "enabled" : "disabled"],
+    ["Seen before filter", String(diagnostics.seen_before_filter ?? 0)],
+    ["Accepted after gates", String(diagnostics.accepted_after_gates ?? 0)],
+    ["Last seen", diagnostics.last_seen_ms === null || diagnostics.last_seen_ms === undefined ? "never" : `${diagnostics.last_seen_ms} ms ago`],
+    ["Last accepted", diagnostics.last_accepted_ms === null || diagnostics.last_accepted_ms === undefined ? "never" : `${diagnostics.last_accepted_ms} ms ago`]
+  ];
+
+  nodeSourceMacDiagnosticsEl.className = "source-mac-diagnostics";
+  nodeSourceMacDiagnosticsEl.replaceChildren(
+    ...items.map(([labelText, valueText]) => {
+      const item = document.createElement("div");
+      item.className = "source-mac-diagnostic";
+      appendText(item, "span", labelText);
+      appendText(item, "strong", valueText);
+      return item;
+    })
+  );
+}
+
 /** Renders the selected ESP32 node's live status fields in the modal. */
 function renderNodeStatus(status) {
   const receiverKeys = [
@@ -742,6 +772,7 @@ function renderNodeStatus(status) {
   );
   if (selectedNodeRole === "csi_receiver") {
     renderMacHistogram(status);
+    renderSourceMacDiagnostics(status);
   }
 }
 
@@ -917,6 +948,7 @@ function closeNodeSettings() {
   nodeStatusDetailsEl.replaceChildren();
   nodeMacHistogramEl.className = "mac-histogram empty";
   nodeMacHistogramEl.textContent = "No CSI MACs observed yet.";
+  nodeSourceMacDiagnosticsEl.replaceChildren();
   nodeConfigFormEl.reset();
   nodeCalibrationFormEl.reset();
   setNodeSettingsMessage("");
