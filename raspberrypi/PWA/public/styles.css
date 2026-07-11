@@ -506,6 +506,73 @@ dd {
   gap: 16px;
 }
 
+.node-mac-histogram-panel {
+  grid-column: 1 / -1;
+}
+
+.mac-histogram {
+  display: grid;
+  gap: 10px;
+}
+
+.mac-histogram.empty {
+  color: #53606f;
+}
+
+.mac-histogram-row {
+  display: grid;
+  grid-template-columns: 58px 34px minmax(120px, 1fr) 88px;
+  align-items: center;
+  gap: 10px;
+  min-height: 126px;
+  padding: 8px 0;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.mac-histogram-row:last-child {
+  border-bottom: 0;
+}
+
+.mac-histogram-row strong {
+  color: #18212f;
+  text-align: right;
+}
+
+.mac-histogram-row small {
+  color: #53606f;
+  text-align: right;
+}
+
+.mac-histogram-label {
+  position: relative;
+  width: 34px;
+  height: 116px;
+  color: #53606f;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.78rem;
+}
+
+.mac-histogram-label span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  white-space: nowrap;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.mac-histogram-track {
+  height: 16px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #edf1f5;
+}
+
+.mac-histogram-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: #2f6fed;
+}
+
 .node-config-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -614,5 +681,14 @@ dd {
   .node-settings-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .mac-histogram-row {
+    grid-template-columns: 48px 34px minmax(80px, 1fr);
+  }
+
+  .mac-histogram-row small {
+    grid-column: 1 / -1;
+    text-align: left;
   }
 }

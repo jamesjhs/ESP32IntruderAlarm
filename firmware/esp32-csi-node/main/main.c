@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,7 @@
 #define IDENTIFY_BLINK_MS 120
 #define LOG_LINE_COUNT 100
 #define LOG_LINE_LEN 192
+#define CSI_MAC_HISTOGRAM_LEN 10
 
 typedef enum {
     SENSE_IDLE = 0,
@@ -200,6 +202,16 @@ typedef struct {
     uint32_t ip;
     uint32_t netmask;
 } discovery_request_t;
+
+typedef struct {
+    uint8_t mac[6];
+    uint32_t count;
+    int64_t last_seen_us;
+    bool valid;
+} csi_mac_histogram_entry_t;
+
+static portMUX_TYPE csi_mac_histogram_lock = portMUX_INITIALIZER_UNLOCKED;
+static csi_mac_histogram_entry_t csi_mac_histogram[CSI_MAC_HISTOGRAM_LEN];
 
 static void trim_log_line(char *line)
 {
@@ -479,6 +491,42 @@ static void normalize_mac_text(char *value, size_t value_len)
 static void format_mac(const uint8_t mac[6], char *out, size_t out_len)
 {
     snprintf(out, out_len, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static void update_csi_mac_histogram(const uint8_t mac[6], int64_t now_us)
+{
+    int empty_index = -1;
+    int replace_index = 0;
+    uint32_t lowest_count = UINT32_MAX;
+    int64_t oldest_seen_us = INT64_MAX;
+
+    portENTER_CRITICAL(&csi_mac_histogram_lock);
+    for (int i = 0; i < CSI_MAC_HISTOGRAM_LEN; i++) {
+        csi_mac_histogram_entry_t *entry = &csi_mac_histogram[i];
+        if (entry->valid && memcmp(entry->mac, mac, sizeof(entry->mac)) == 0) {
+            if (entry->count < UINT32_MAX) {
+                entry->count++;
+            }
+            entry->last_seen_us = now_us;
+            portEXIT_CRITICAL(&csi_mac_histogram_lock);
+            return;
+        }
+        if (!entry->valid && empty_index < 0) {
+            empty_index = i;
+        } else if (entry->valid && (entry->count < lowest_count ||
+                   (entry->count == lowest_count && entry->last_seen_us < oldest_seen_us))) {
+            lowest_count = entry->count;
+            oldest_seen_us = entry->last_seen_us;
+            replace_index = i;
+        }
+    }
+
+    csi_mac_histogram_entry_t *entry = &csi_mac_histogram[empty_index >= 0 ? empty_index : replace_index];
+    memcpy(entry->mac, mac, sizeof(entry->mac));
+    entry->count = 1;
+    entry->last_seen_us = now_us;
+    entry->valid = true;
+    portEXIT_CRITICAL(&csi_mac_histogram_lock);
 }
 
 static void sanitize_api_path(char *path, size_t path_len)
@@ -1123,8 +1171,10 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         return;
     }
 
+    int64_t now = esp_timer_get_time();
     memcpy(csi_last_mac, info->mac, sizeof(csi_last_mac));
     csi_last_mac_valid = true;
+    update_csi_mac_histogram(info->mac, now);
 
     if (csi_source_filter_enabled && memcmp(info->mac, csi_source_mac, sizeof(csi_source_mac)) != 0) {
         memcpy(csi_last_filtered_mac, info->mac, sizeof(csi_last_filtered_mac));
@@ -1133,7 +1183,6 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         return;
     }
 
-    int64_t now = esp_timer_get_time();
     int64_t min_interval_us = csi_min_interval_us;
     if (min_interval_us > 0 && csi_last_sample_us > 0 && now - csi_last_sample_us < min_interval_us) {
         csi_throttled_samples++;
@@ -1824,6 +1873,20 @@ static cJSON *status_to_json(void)
     bool last_filtered_mac_valid = csi_last_filtered_mac_valid;
     memcpy(last_mac, csi_last_mac, sizeof(last_mac));
     memcpy(last_filtered_mac, csi_last_filtered_mac, sizeof(last_filtered_mac));
+    csi_mac_histogram_entry_t mac_histogram[CSI_MAC_HISTOGRAM_LEN];
+    portENTER_CRITICAL(&csi_mac_histogram_lock);
+    memcpy(mac_histogram, csi_mac_histogram, sizeof(mac_histogram));
+    portEXIT_CRITICAL(&csi_mac_histogram_lock);
+    for (int i = 0; i < CSI_MAC_HISTOGRAM_LEN - 1; i++) {
+        for (int j = i + 1; j < CSI_MAC_HISTOGRAM_LEN; j++) {
+            if ((!mac_histogram[i].valid && mac_histogram[j].valid) ||
+                (mac_histogram[i].valid && mac_histogram[j].valid && mac_histogram[j].count > mac_histogram[i].count)) {
+                csi_mac_histogram_entry_t tmp = mac_histogram[i];
+                mac_histogram[i] = mac_histogram[j];
+                mac_histogram[j] = tmp;
+            }
+        }
+    }
     xSemaphoreTake(state_lock, portMAX_DELAY);
     cfg = g_config;
     status = g_status;
@@ -1859,6 +1922,26 @@ static cJSON *status_to_json(void)
     }
     cJSON_AddStringToObject(root, "last_csi_mac", last_mac_valid ? last_mac_text : "");
     cJSON_AddStringToObject(root, "last_filtered_csi_mac", last_filtered_mac_valid ? last_filtered_mac_text : "");
+    cJSON *histogram = cJSON_AddArrayToObject(root, "csi_mac_histogram");
+    if (histogram != NULL) {
+        int64_t now_us = esp_timer_get_time();
+        for (int i = 0; i < CSI_MAC_HISTOGRAM_LEN; i++) {
+            if (!mac_histogram[i].valid) {
+                continue;
+            }
+            char mac_text[18] = {0};
+            format_mac(mac_histogram[i].mac, mac_text, sizeof(mac_text));
+            cJSON *entry = cJSON_CreateObject();
+            if (entry == NULL) {
+                continue;
+            }
+            cJSON_AddStringToObject(entry, "mac", mac_text);
+            cJSON_AddNumberToObject(entry, "count", mac_histogram[i].count);
+            cJSON_AddNumberToObject(entry, "last_seen_ms",
+                                    mac_histogram[i].last_seen_us > 0 ? (uint32_t)((now_us - mac_histogram[i].last_seen_us) / 1000LL) : 0);
+            cJSON_AddItemToArray(histogram, entry);
+        }
+    }
     cJSON_AddStringToObject(root, "sensing_state", sense_state_name(status.state));
     cJSON_AddNumberToObject(root, "baseline_age_s", status.baseline_age_s);
     cJSON_AddNumberToObject(root, "last_packet_ms", status.last_packet_ms);
@@ -2203,6 +2286,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         ".control span{color:#9fb0bf;font-size:12px;text-transform:uppercase}.control b{font-size:18px;overflow-wrap:anywhere}input[type=range]{width:100%;padding:0}.actions{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}"
         ".calform{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px}.calform label{display:grid;gap:5px;color:#9fb0bf;font-size:12px;text-transform:uppercase}.calform input{width:100%;box-sizing:border-box}.calform .wide{grid-column:1/-1}"
         ".legend{display:flex;gap:14px;align-items:center;margin-top:10px;color:#9fb0bf;font-size:13px;flex-wrap:wrap}.sw{display:inline-block;width:22px;height:3px;margin-right:6px;vertical-align:middle}.score{background:#5bd19a}.rate{background:#62a8ff}.th{background:#f6c85f}.settle{background:#5d6670}"
+        ".mach{display:grid;gap:10px;margin-top:10px}.mach.empty{color:#9fb0bf}.macrow{display:grid;grid-template-columns:58px 34px minmax(120px,1fr) 88px;align-items:center;gap:10px;min-height:126px;border:1px solid #33404b;border-radius:8px;padding:8px;background:#182029}.macrow strong{text-align:right}.macrow small{color:#9fb0bf;text-align:right}.maclabel{position:relative;width:34px;height:116px;color:#9fb0bf;font:12px Consolas,monospace}.maclabel span{position:absolute;left:50%;top:50%;white-space:nowrap;transform:translate(-50%,-50%) rotate(90deg)}.mactrack{height:16px;overflow:hidden;border-radius:4px;background:#0d1116}.macbar{height:100%;border-radius:inherit;background:#62a8ff}"
         ".glossary{margin-top:28px;border-top:1px solid #33404b;padding-top:18px}.glossary h2{margin:0 0 12px}.glossary dl{display:grid;grid-template-columns:minmax(160px,240px) 1fr;gap:9px 14px}.glossary dt{color:#ecf2f8;font-weight:700}.glossary dd{margin:0;color:#b9c7d3;line-height:1.45}@media(max-width:640px){.glossary dl{grid-template-columns:1fr}.glossary dd{margin-bottom:8px}}"
         "canvas{width:100%;height:220px;margin-top:18px;border:1px solid #33404b;border-radius:8px;background:#0d1116}"
         "</style></head><body><main><h1 id=\"title\">ESP32 CSI Node</h1><div class=\"grid\" id=\"grid\"></div><canvas id=\"chart\" width=\"900\" height=\"220\"></canvas>"
@@ -2223,6 +2307,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<label class=\"control\"><span>Graph Score Max</span><b id=\"gmv\">10</b><input id=\"gm\" type=\"range\" min=\"1\" max=\"20\" step=\"1\" value=\"10\"></label>"
         "<label class=\"control\"><span>Graph Rate Max</span><b id=\"grv\">160</b><input id=\"gr\" type=\"range\" min=\"10\" max=\"250\" step=\"10\" value=\"160\"></label>"
         "<label class=\"control\"><span>Graph Update Rate</span><b id=\"guv\">1.0 Hz</b><input id=\"gu\" type=\"range\" min=\"0.2\" max=\"20\" step=\"0.2\" value=\"1\"></label></div>"
+        "<section><h2>CSI MAC Histogram</h2><div id=\"mach\" class=\"mach empty\">No CSI MACs observed yet.</div></section>"
         "<div class=\"actions\"><button id=\"cal\" type=\"button\">Auto-calibrate stillness</button><button id=\"delcal\" type=\"button\">Delete calibration data</button><span id=\"calmsg\"></span></div>"
         "<section><h2>Persisted Calibration</h2><div class=\"calform\">"
         "<label>Valid<input id=\"cv\" type=\"text\" readonly></label><label>Windows<input id=\"cw\" type=\"number\" min=\"0\" step=\"1\"></label>"
@@ -2278,6 +2363,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "function apiPath(){let p=pa.value.trim()||'/espdata';return p[0]=='/'?p:'/'+p}"
         "function apiUrl(){return 'http://'+(pi.value.trim()||'{pi-IP-address}')+':'+(pp.value||3005)+apiPath()}"
         "function refreshPi(){piv.textContent=pi.value.trim()||'unset';ppv.textContent=pp.value||3005;pav.textContent=apiUrl()}"
+        "function renderMach(s){const rows=Array.isArray(s.csi_mac_histogram)?s.csi_mac_histogram.filter(x=>x&&x.mac).sort((a,b)=>(b.count||0)-(a.count||0)):[];if(!rows.length){mach.className='mach empty';mach.textContent='No CSI MACs observed yet.';return}const max=Math.max(...rows.map(x=>+x.count||0),1);mach.className='mach';mach.innerHTML=rows.map(x=>'<div class=macrow><strong>'+Number(x.count||0)+'</strong><div class=maclabel><span>'+String(x.mac)+'</span></div><div class=mactrack><div class=macbar style=\"width:'+Math.max(4,((+x.count||0)/max)*100)+'%\"></div></div><small>'+String(x.last_seen_ms==null?'n/a':x.last_seen_ms)+' ms ago</small></div>').join('')}"
         "function setCal(x){cv.value=x.valid?'yes':'no';cw.value=x.calibration_windows||0;ce.value=Number(x.baseline_energy||0).toFixed(6);cvar.value=Number(x.baseline_variance||0).toFixed(6);csh.value=Number(x.baseline_shape||0).toFixed(6);cph.value=Number(x.baseline_phase||0).toFixed(6);cpv.value=Number(x.baseline_phase_variance||0).toFixed(6);cno.value=Number(x.baseline_noise||0.05).toFixed(6);cpn.value=Number(x.baseline_phase_noise||0.01).toFixed(6)}"
         "async function loadCal(){setCal(await(await fetch('/api/calibration')).json())}"
         "async function saveCal(){const body={calibration_windows:+cw.value,baseline_energy:+ce.value,baseline_variance:+cvar.value,baseline_shape:+csh.value,baseline_phase:+cph.value,baseline_phase_variance:+cpv.value,baseline_noise:+cno.value,baseline_phase_noise:+cpn.value};setCal(await(await fetch('/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json());calmsg.textContent='Calibration values saved';msgUntil=Date.now()+3000}"
@@ -2296,6 +2382,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "delcal.onclick=async()=>{delcal.disabled=true;calmsg.textContent='Calibration data deleted';msgUntil=Date.now()+3000;await fetch('/api/calibration',{method:'DELETE'});await loadCal();setTimeout(()=>delcal.disabled=false,1000)};"
         "async function tick(){if(busy){schedule();return}busy=true;try{const r=await fetch('/status.json');const s=await r.json();title.textContent=s.name+' '+s.ip;"
         "grid.innerHTML=keys.map(k=>'<div class=tile><div class=label>'+k+'</div><div class=value>'+fmt(k,s[k])+'</div></div>').join('');"
+        "renderMach(s);"
         "cal.disabled=!!s.calibrating;calmsg.textContent=s.calibrating?'Calibrating '+Math.ceil(s.calibration_remaining_ms/1000)+'s':(Date.now()<msgUntil?calmsg.textContent:'');"
         "if(calWas&&!s.calibrating)loadCal();calWas=!!s.calibrating;hist.push({m:s.movement_score,r:s.sample_rate_hz});if(hist.length>120)hist.shift();draw()}finally{busy=false;schedule()}}"
         "init().then(()=>{guv.textContent=Number(gu.value).toFixed(1)+' Hz';tick()})</script></main></body></html>";

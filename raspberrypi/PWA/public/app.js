@@ -48,6 +48,8 @@ const nodeSettingsTitleEl = document.querySelector("#node-settings-title");
 const nodeStatusTitleEl = document.querySelector("#node-status-title");
 const nodeStatusDetailsEl = document.querySelector("#node-status-details");
 const nodeConfigFormEl = document.querySelector("#node-config-form");
+const nodeMacHistogramPanelEl = document.querySelector("#node-mac-histogram-panel");
+const nodeMacHistogramEl = document.querySelector("#node-mac-histogram");
 const nodeCalibrationFormEl = document.querySelector("#node-calibration-form");
 const nodeCalibrationPanelEl = document.querySelector("#node-calibration-panel");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
@@ -365,6 +367,7 @@ function setNodeSettingsRole(role) {
   const isSender = role === "csi_sender";
   nodeStatusTitleEl.textContent = isSender ? "Sender Status" : "Receiver Status";
   nodeCalibrationPanelEl.classList.toggle("hidden", isSender);
+  nodeMacHistogramPanelEl.classList.toggle("hidden", isSender);
   for (const label of nodeConfigFormEl.querySelectorAll("[data-config-role]")) {
     const targetRole = label.dataset.configRole;
     label.classList.toggle("hidden", targetRole !== "all" && targetRole !== (isSender ? "sender" : "receiver"));
@@ -647,6 +650,41 @@ function renderRecords(target, records, emptyText) {
   );
 }
 
+function renderMacHistogram(status) {
+  const histogram = Array.isArray(status?.csi_mac_histogram) ? status.csi_mac_histogram : [];
+  const entries = histogram
+    .filter((entry) => entry?.mac)
+    .slice()
+    .sort((a, b) => Number(b.count || 0) - Number(a.count || 0));
+  if (!entries.length) {
+    nodeMacHistogramEl.className = "mac-histogram empty";
+    nodeMacHistogramEl.textContent = "No CSI MACs observed yet.";
+    return;
+  }
+
+  const maxCount = Math.max(...entries.map((entry) => Number(entry.count || 0)), 1);
+  nodeMacHistogramEl.className = "mac-histogram";
+  nodeMacHistogramEl.replaceChildren(
+    ...entries.map((entry) => {
+      const row = document.createElement("div");
+      row.className = "mac-histogram-row";
+      const label = document.createElement("div");
+      label.className = "mac-histogram-label";
+      appendText(label, "span", String(entry.mac));
+      const track = document.createElement("div");
+      track.className = "mac-histogram-track";
+      const bar = document.createElement("div");
+      bar.className = "mac-histogram-bar";
+      bar.style.width = `${Math.max(4, (Number(entry.count || 0) / maxCount) * 100)}%`;
+      track.appendChild(bar);
+      appendText(row, "strong", String(entry.count ?? 0));
+      row.append(label, track);
+      appendText(row, "small", `${entry.last_seen_ms ?? "n/a"} ms ago`);
+      return row;
+    })
+  );
+}
+
 /** Renders the selected ESP32 node's live status fields in the modal. */
 function renderNodeStatus(status) {
   const receiverKeys = [
@@ -702,6 +740,9 @@ function renderNodeStatus(status) {
       return row;
     })
   );
+  if (selectedNodeRole === "csi_receiver") {
+    renderMacHistogram(status);
+  }
 }
 
 /** Writes a number-ish value into a form field without decimal formatting. */
@@ -874,6 +915,8 @@ function closeNodeSettings() {
   setNodeSettingsRole(selectedNodeRole);
   setCalibrationControlsDisabled(false);
   nodeStatusDetailsEl.replaceChildren();
+  nodeMacHistogramEl.className = "mac-histogram empty";
+  nodeMacHistogramEl.textContent = "No CSI MACs observed yet.";
   nodeConfigFormEl.reset();
   nodeCalibrationFormEl.reset();
   setNodeSettingsMessage("");
