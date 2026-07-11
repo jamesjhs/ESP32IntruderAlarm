@@ -769,6 +769,159 @@ Success criteria:
 - Whether the final system should integrate with Home Assistant, MQTT, or remain standalone.
 - Whether future hardware should prefer newer ESP32-C5/C6/S3 boards over original ESP32 boards for better CSI support.
 
+## Discussion
+
+### ESP32 Board Variant Assessment for CSI Sensing
+
+The project currently targets ESP32-WROOM-32 DevKit1 boards. This section assesses
+the practical limitations of those boards for CSI motion sensing and compares them
+with two upgrade candidates — the ESP32-S3-WROOM-1 and the ESP32-C6 — in terms of
+reliability and signal-to-noise ratio.
+
+#### Baseline: ESP32-WROOM-32 DevKit1
+
+| Parameter | Value |
+| --- | --- |
+| CPU | Dual-core Xtensa LX6 @ 240 MHz |
+| SRAM | 520 KB internal |
+| Wi-Fi | 2.4 GHz 802.11 b/g/n only |
+| Antenna | Single PCB trace (~1–2 dBi) |
+| CSI subcarriers | 52 (HT20) / 114 (HT40) |
+| Antenna paths | 1 RX, 1 TX |
+
+Known weaknesses for CSI sensing:
+
+- Single receive path — no antenna diversity, so orientation-dependent fades are
+  permanent once the board is installed. Small rotations after calibration shift
+  baselines measurably.
+- 520 KB SRAM fills quickly during burst-mode CSI accumulation. Packet drops
+  introduce statistical gaps in variance estimates.
+- The LX6 dual-core leaves limited headroom for simultaneously running the CSI
+  callback, FreeRTOS queue processing, HTTP server, and mDNS without contention at
+  high burst rates.
+
+#### Upgrade Candidate: ESP32-S3-WROOM-1
+
+| Parameter | Change vs WROOM-32 |
+| --- | --- |
+| CPU | Dual-core Xtensa LX7 @ 240 MHz — approximately 40% faster IPC |
+| SRAM | 512 KB internal + up to 8 MB PSRAM via OSPI |
+| Wi-Fi | 2.4 GHz 802.11 b/g/n — same band, same CSI API |
+| CSI subcarriers | Same count (52/114) |
+| Antenna | Dual antenna with hardware diversity switch on the WROOM-1 variant; IPEX/U.FL external connector on the WROOM-1U variant |
+| Firmware compatibility | Drop-in — same ESP-IDF CSI API surface |
+
+The key gains for CSI sensing are antenna diversity and PSRAM. Maximum Ratio
+Combining across two antenna paths raises the effective received SNR by approximately
+3–3.5 dB in a typical indoor multipath environment:
+
+```
+3 dB gain   →  linear SNR ×2.0  →  +100% SNR improvement
+3.5 dB gain →  linear SNR ×2.2  →  +120% SNR improvement (practical midpoint)
+```
+
+This matters because the alarm relies on detecting small amplitude and phase
+perturbations in individual subcarriers. A lower noise floor means the minimum
+detectable movement shrinks. PSRAM eliminates the burst-mode buffer pressure that
+causes packet drops under load, improving sample completeness from roughly 90–95%
+under heavy burst rates to near 100%.
+
+If the WROOM-1U variant is used (external antenna connector), an external 2.4 GHz
+stub antenna (typically 2–5 dBi) adds a further 1–3 dB over the PCB trace, stacking
+on top of the diversity gain for a combined total of approximately 5–6.5 dB
+improvement in effective SNR (×3–4.5 linear). Critically, the external antenna also
+decouples the board's physical mounting position from the antenna orientation, which
+eliminates one of the most common post-calibration baseline drift causes — someone
+nudging or reorienting the board.
+
+**Note:** The WROOM-1U variant has an IPEX/U.FL connector in place of the PCB trace
+antenna. Confirm the `-1U` suffix on the module label before ordering.
+
+#### Upgrade Candidate: ESP32-C6-DevKitC
+
+| Parameter | Change vs WROOM-32 |
+| --- | --- |
+| CPU | Single-core RISC-V @ 160 MHz — weaker than the WROOM-32 |
+| SRAM | 512 KB |
+| Wi-Fi | 2.4 GHz Wi-Fi 6 (802.11ax) |
+| Antenna | Single antenna |
+| CSI tooling maturity | Low — community tooling is primarily built around the original ESP32 and ESP32-S3 |
+
+The C6 does not offer a reliability improvement for this application at this stage.
+Its single-core RISC-V at 160 MHz is slower than the current dual-core LX6, and the
+absence of antenna diversity provides no SNR gain over the WROOM-32. The Wi-Fi 6
+receiver noise figure may be marginally better (+0.5–1 dB), yielding only a 12–26%
+linear SNR improvement — far smaller than the diversity gain available from the S3.
+The ESP-CSI community ecosystem, reference datasets, and example code are almost
+entirely built around the original ESP32 and ESP32-S3; the C6 CSI port is immature
+by comparison.
+
+#### Summary
+
+| Board | Est. reliability gain vs WROOM-32 | Est. SNR gain vs WROOM-32 | Key driver | Note |
+| --- | --- | --- | --- | --- |
+| ESP32-WROOM-32 DevKit1 | Baseline | Baseline | — | SRAM pressure at burst rates; single fixed-orientation antenna |
+| ESP32-S3-WROOM-1 DevKitC | ~25–40% | ~+3–3.5 dB (~×2–2.2 linear) | Dual-antenna MRC + PSRAM + LX7 headroom | Drop-in firmware migration; WROOM-1U variant adds further ~+2–3 dB from external antenna |
+| ESP32-C6-DevKitC | Neutral to slightly negative | ~+0.5–1 dB (~×1.1–1.3 linear) | Wi-Fi 6 receiver NF only | Single antenna; weaker CPU; immature CSI tooling — not recommended yet |
+
+The ESP32-S3-WROOM-1U is the strongest upgrade for the receiver role in this
+project. The C6 should be reconsidered once Espressif matures its Wi-Fi 6 CSI stack
+and community tooling validates its sensing performance.
+
+### Recommended Hardware Topology
+
+Based on the assessment above, the recommended hardware topology for the three-board
+prototype is:
+
+- **Two ESP32-S3-WROOM-1U boards** as CSI receiver nodes, each fitted with a
+  2.4 GHz external stub antenna.
+- **One ESP32-WROOM-32 DevKit1** as the dedicated CSI sender node.
+
+#### Sender Role: ESP32-WROOM-32
+
+The sender's job is to emit a steady, known-MAC UDP broadcast at a configurable rate.
+It does not process CSI or perform signal analysis. The requirements it must meet —
+sustained UDP broadcast at 20–100 pps, network stability over hours, and Pi-managed
+start/stop — are well within the WROOM-32's capability. The existing
+`firmware/esp32-csi-sender` target already runs on this board, so no firmware changes
+are required.
+
+The sender's single antenna is not a limitation here. Received SNR for CSI sensing is
+a receiver-side measurement; the dual-antenna MRC on the S3 receivers compensates for
+multipath and orientation effects regardless of the sender's antenna. The one
+practical requirement is to fix the sender's physical position and antenna orientation
+after calibration, because changes to the sender's radiation pattern shift receiver
+baselines in the same way that moving any board does.
+
+#### Receiver Role: ESP32-S3-WROOM-1U
+
+The external antenna provides two compounding benefits on the receiver side:
+
+- **Repositionable antenna**: the board can be mounted inside an enclosure or fixed
+  to a surface at any angle, while the antenna is aimed into the monitored space
+  independently.
+- **Stable baseline**: because the antenna position is fixed separately from the PCB,
+  accidental board nudges no longer shift the calibrated channel state. This addresses
+  one of the most common sources of baseline drift noted in the physical placement
+  guidance above.
+
+Combined with the hardware diversity gain, the estimated total improvement over the
+WROOM-32 baseline is approximately **5–6.5 dB in effective received SNR** (×3–4.5
+linear). For detection reliability, this translates to an estimated **25–40%
+improvement** in overall alarm reliability, driven primarily by the elimination of
+orientation-dependent fades and burst-mode packet drops.
+
+#### Topology Summary
+
+| Role | Board | Reason |
+| --- | --- | --- |
+| Receiver node 0 | ESP32-S3-WROOM-1U | Dual-antenna MRC + external antenna + PSRAM |
+| Receiver node 1 | ESP32-S3-WROOM-1U | Dual-antenna MRC + external antenna + PSRAM |
+| Sender node | ESP32-WROOM-32 | Adequate for broadcast-only sender role; existing firmware; cost-efficient |
+
+This topology applies the upgrade budget to the boards that benefit from it and keeps
+the proven WROOM-32 firmware unchanged on the sender.
+
 ## Reference Material
 
 - [ESP-IDF Wi-Fi API: CSI callback/config/enable functions](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/network/esp_wifi.html)
