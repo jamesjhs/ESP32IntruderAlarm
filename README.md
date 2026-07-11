@@ -2,7 +2,7 @@
 
 An experimental, privacy-preserving intruder alarm that uses Wi-Fi Channel State Information (CSI) from ESP32 boards to detect movement inside a home.
 
-The long-term goal is to place three ESP32 sensing nodes around a house and connect them, via the home router, to a Raspberry Pi backend. The ESP32 devices collect CSI features from Wi-Fi traffic. The Raspberry Pi polls each node, fuses their movement scores, exposes a local PWA dashboard, and raises an alarm when movement is detected while the system is armed. The Pi-hosted service is intended to be available at `https://house.jahosi.co.uk` through a Cloudflare Tunnel.
+The long-term goal is to place ESP32 sensing nodes (and/or a sending node) around a house and connect them, via the home router, to a Raspberry Pi backend. The ESP32 devices collect CSI features from Wi-Fi traffic. The Raspberry Pi polls each node, fuses their movement scores, exposes a local PWA dashboard, and raises an alarm when movement is detected while the system is armed. The Pi-hosted service is intended to be available via the web interface of the user's choice, e.g., NGINX or Cloudflare Tunnel.
 
 ## Current Version
 
