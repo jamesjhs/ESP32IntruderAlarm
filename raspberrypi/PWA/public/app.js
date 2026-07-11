@@ -129,6 +129,8 @@ const NODE_STATUS_HELP = {
   last_packet_ms: "Milliseconds since the last accepted packet.",
   csi_source_mac: "Configured dedicated sender MAC used for CSI source filtering.",
   csi_source_filter_enabled: "Whether this receiver ignores CSI frames from other source MACs.",
+  last_csi_mac: "Most recent MAC address reported by ESP-IDF for a CSI frame before source filtering.",
+  last_filtered_csi_mac: "Most recent CSI MAC rejected because it did not match the configured source filter.",
   source_filtered_samples: "CSI frames ignored because they did not come from the configured sender MAC.",
   calibrating: "Whether the node is currently recording a quiet baseline."
 };
@@ -140,7 +142,7 @@ const NODE_CONFIG_HELP = {
   pi_port: "Port on the Pi worker that accepts ESP32 telemetry posts.",
   pi_api_path: "HTTP path on the Pi worker for telemetry, normally /espdata.",
   sta_mac: "Read-only sender station MAC. Copy this to receiver CSI sender MAC fields when source filtering is used.",
-  csi_source_mac: "Optional MAC address of the dedicated ESP32 CSI sender. When filtering is enabled, other source MACs are ignored.",
+  csi_source_mac: "Optional CSI source MAC to keep. Use receiver status diagnostics to confirm which MAC ESP-IDF actually reports before enabling filtering.",
   csi_source_filter_enabled: "Only score CSI frames from the configured sender MAC.",
   enabled: "Sender-only: turn steady CSI stimulus packets on or off.",
   packet_rate_hz: "Sender-only: target UDP broadcast packet cadence.",
@@ -356,16 +358,6 @@ function setCalibrationControlsDisabled(disabled) {
       element.disabled = disabled;
     }
   }
-}
-
-/** Returns the first known dedicated sender MAC when the topology is unambiguous. */
-function detectedSenderMac() {
-  const senderMacs = lastStatusNodes
-    .map((node) => node.payload)
-    .filter((payload) => payload?.role === "csi_sender" && payload.sta_mac)
-    .map((payload) => String(payload.sta_mac).trim())
-    .filter(Boolean);
-  return senderMacs.length === 1 ? senderMacs[0] : "";
 }
 
 /** Shows only controls that make sense for the selected ESP32 role. */
@@ -670,6 +662,8 @@ function renderNodeStatus(status) {
     "noise_floor",
     "csi_source_mac",
     "csi_source_filter_enabled",
+    "last_csi_mac",
+    "last_filtered_csi_mac",
     "source_filtered_samples",
     "packet_count",
     "last_packet_ms",
@@ -729,8 +723,7 @@ function populateNodeConfigForm(config) {
   nodeConfigFormEl.elements.pi_ip.value = config.pi_ip ?? "";
   setFormNumber(nodeConfigFormEl, "pi_port", config.pi_port ?? 3005);
   nodeConfigFormEl.elements.pi_api_path.value = config.pi_api_path ?? "/espdata";
-  const sourceMac = config.csi_source_mac || (selectedNodeRole === "csi_receiver" ? detectedSenderMac() : "");
-  nodeConfigFormEl.elements.csi_source_mac.value = sourceMac;
+  nodeConfigFormEl.elements.csi_source_mac.value = config.csi_source_mac ?? "";
   nodeConfigFormEl.elements.csi_source_filter_enabled.checked = Boolean(config.csi_source_filter_enabled);
   nodeConfigFormEl.elements.enabled.checked = Boolean(config.enabled);
   setFormNumber(nodeConfigFormEl, "packet_rate_hz", config.packet_rate_hz);

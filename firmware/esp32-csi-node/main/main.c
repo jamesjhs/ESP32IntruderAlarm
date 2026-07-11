@@ -180,6 +180,10 @@ static volatile uint32_t csi_queue_drops;
 static volatile uint32_t csi_accepted_samples;
 static volatile bool csi_source_filter_enabled;
 static uint8_t csi_source_mac[6];
+static volatile bool csi_last_mac_valid;
+static volatile bool csi_last_filtered_mac_valid;
+static uint8_t csi_last_mac[6];
+static uint8_t csi_last_filtered_mac[6];
 static volatile bool calibration_requested;
 static volatile bool calibration_delete_requested;
 static volatile bool calibration_apply_requested;
@@ -470,6 +474,11 @@ static void normalize_mac_text(char *value, size_t value_len)
         return;
     }
     snprintf(value, value_len, "%02X:%02X:%02X:%02X:%02X:%02X", parsed[0], parsed[1], parsed[2], parsed[3], parsed[4], parsed[5]);
+}
+
+static void format_mac(const uint8_t mac[6], char *out, size_t out_len)
+{
+    snprintf(out, out_len, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 static void sanitize_api_path(char *path, size_t path_len)
@@ -1114,7 +1123,12 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         return;
     }
 
+    memcpy(csi_last_mac, info->mac, sizeof(csi_last_mac));
+    csi_last_mac_valid = true;
+
     if (csi_source_filter_enabled && memcmp(info->mac, csi_source_mac, sizeof(csi_source_mac)) != 0) {
+        memcpy(csi_last_filtered_mac, info->mac, sizeof(csi_last_filtered_mac));
+        csi_last_filtered_mac_valid = true;
         csi_source_filtered_samples++;
         return;
     }
@@ -1804,6 +1818,12 @@ static cJSON *status_to_json(void)
     node_config_t cfg;
     node_status_t status;
     calibration_data_t cal;
+    uint8_t last_mac[6];
+    uint8_t last_filtered_mac[6];
+    bool last_mac_valid = csi_last_mac_valid;
+    bool last_filtered_mac_valid = csi_last_filtered_mac_valid;
+    memcpy(last_mac, csi_last_mac, sizeof(last_mac));
+    memcpy(last_filtered_mac, csi_last_filtered_mac, sizeof(last_filtered_mac));
     xSemaphoreTake(state_lock, portMAX_DELAY);
     cfg = g_config;
     status = g_status;
@@ -1829,6 +1849,16 @@ static cJSON *status_to_json(void)
     cJSON_AddBoolToObject(root, "movement_detected", status.movement_detected);
     cJSON_AddStringToObject(root, "csi_source_mac", cfg.csi_source_mac);
     cJSON_AddBoolToObject(root, "csi_source_filter_enabled", cfg.csi_source_filter_enabled);
+    char last_mac_text[18] = {0};
+    char last_filtered_mac_text[18] = {0};
+    if (last_mac_valid) {
+        format_mac(last_mac, last_mac_text, sizeof(last_mac_text));
+    }
+    if (last_filtered_mac_valid) {
+        format_mac(last_filtered_mac, last_filtered_mac_text, sizeof(last_filtered_mac_text));
+    }
+    cJSON_AddStringToObject(root, "last_csi_mac", last_mac_valid ? last_mac_text : "");
+    cJSON_AddStringToObject(root, "last_filtered_csi_mac", last_filtered_mac_valid ? last_filtered_mac_text : "");
     cJSON_AddStringToObject(root, "sensing_state", sense_state_name(status.state));
     cJSON_AddNumberToObject(root, "baseline_age_s", status.baseline_age_s);
     cJSON_AddNumberToObject(root, "last_packet_ms", status.last_packet_ms);
