@@ -1,6 +1,6 @@
 # ESP32 CSI Node
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 Standalone ESP-IDF firmware for an ESP32 Wi-Fi CSI movement sensor node.
 
@@ -15,11 +15,23 @@ configuration.
 
 ## Current Release Notes
 
-`0.4.0` adds controlled-source CSI support. Receiver nodes can be configured
-with the dedicated sender's station MAC and can ignore CSI frames from other
-sources, making movement scoring less dependent on mixed household/router
-traffic. These settings are available from the Pi PWA and the receiver
-`/api/config` endpoint.
+`0.4.1` adds protected configured-source-MAC diagnostics for controlled-source
+CSI debugging. Receiver nodes now keep non-evicting counters for the configured
+sender MAC, alongside the existing top-10 CSI MAC histogram:
+
+- `seen_before_filter`: CSI callbacks whose reported MAC matches the configured
+  sender before source filtering and quality gates.
+- `accepted_after_gates`: matching callbacks that survive source filtering,
+  rate throttling, minimum CSI length/SNR checks, spike filtering, and queue
+  handoff.
+- `last_seen_ms` and `last_accepted_ms`: freshness indicators for the configured
+  sender path.
+
+Controlled-source CSI support from `0.4.0` remains in place. Receiver nodes can
+be configured with the dedicated sender's station MAC and can ignore CSI frames
+from other sources, making movement scoring less dependent on mixed
+household/router traffic. These settings are available from the Pi PWA and the
+receiver `/api/config` endpoint.
 
 ## Build and Flash
 
@@ -75,8 +87,11 @@ The assigned name is saved to NVS and used as the station hostname.
 The current design direction is:
 
 - The Raspberry Pi is the normal dashboard and coordination server.
-- The Pi sends steady UDP probe traffic to each ESP32 node to stimulate CSI at a
-  controlled rate.
+- A dedicated ESP32 sender is the preferred steady 2.4 GHz packet source. It
+  joins the same Wi-Fi network for management, then emits broadcast UDP frames
+  that receivers can hear directly.
+- Optional Pi UDP probe traffic can still be used for experiments, but should
+  be calibrated as part of the normal RF pattern if enabled.
 - Each ESP32 runs local CSI feature extraction and trigger detection.
 - Each ESP32 pushes compact trigger/status telemetry to the Pi every 5-10
   seconds, and should also send immediate event telemetry when movement is
@@ -312,7 +327,16 @@ and API values in plain English.
 - `last_packet_ms`: Milliseconds since the last accepted CSI packet. If this is
   large, the node is not currently receiving usable CSI.
 - `accepted_samples`: Total accepted CSI samples since boot. This should climb
-  steadily when the Pi or router is generating useful traffic.
+  steadily when the sender, Pi probe traffic, or router is generating useful
+  traffic.
+- `csi_source_mac_diagnostics`: Protected diagnostics for the configured sender
+  MAC. Unlike the top-10 histogram, this object is not evicted by louder router
+  or household devices. `seen_before_filter` counts matching CSI callbacks
+  before source filtering, while `accepted_after_gates` counts matching samples
+  that survive the receiver's source filter, rate throttle, quality checks, and
+  queue handoff. If `seen_before_filter` climbs but `accepted_after_gates` does
+  not, the sender is visible but later rejected or throttled. If neither climbs,
+  ESP-IDF is not reporting CSI callbacks with the configured MAC.
 - `packet_count`: Total CSI samples included in completed detection windows
   since boot.
 - `last_window_packets`: Number of accepted CSI samples in the most recent

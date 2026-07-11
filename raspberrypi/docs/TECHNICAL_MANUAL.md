@@ -1,6 +1,6 @@
 # Raspberry Pi Technical Manual
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 ## Architecture
 
@@ -33,6 +33,13 @@ receiver and sender ESP32 devices. Sender telemetry includes `role:
 "csi_sender"` and its station MAC. Receiver configuration can then enable
 `csi_source_filter_enabled` and set `csi_source_mac` so CSI scoring only uses
 frames from that known packet source.
+
+Version `0.4.1` adds receiver diagnostics for that configured source MAC. The
+normal CSI MAC histogram remains a useful top-10 view of all observed CSI MACs,
+but it can evict low-count devices. Receiver status now also includes
+`csi_source_mac_diagnostics`, a protected counter block for the configured
+sender MAC with `seen_before_filter`, `accepted_after_gates`, `last_seen_ms`,
+and `last_accepted_ms`.
 
 ## Ports
 

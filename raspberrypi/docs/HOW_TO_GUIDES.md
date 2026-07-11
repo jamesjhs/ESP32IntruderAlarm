@@ -1,6 +1,6 @@
 # Raspberry Pi How-To Guides
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 ## How To Configure First Install
 
@@ -88,6 +88,14 @@ Copy the sender `sta_mac` value into each receiver's `CSI sender MAC` field,
 enable `Filter to sender`, start the sender, and then run stillness calibration
 on the receivers while the sender is already running at the intended packet
 rate.
+
+After the sender is running, open each receiver's MAC histogram in the PWA or on
+the ESP32 local page. The protected configured-source-MAC panel should show the
+sender MAC. `Seen before filter` rising means ESP-IDF is reporting CSI callbacks
+for that MAC. `Accepted after gates` rising means those callbacks are surviving
+the receiver's filter, throttle, quality checks, and queue handoff. If the
+normal histogram evicts the sender but the protected panel still updates, the
+sender is present but quieter than louder router or household traffic.
 
 ## How To Point Cloudflare Tunnel
 

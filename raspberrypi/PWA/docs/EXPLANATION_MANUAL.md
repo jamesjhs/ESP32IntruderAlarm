@@ -1,6 +1,6 @@
 # PWA Explanation Manual
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 The PWA is the phone and desktop dashboard for the alarm.
 
@@ -13,6 +13,9 @@ ESP32. Sender devices show up in the same ESP32 Nodes card as receivers, but the
 PWA labels them as senders, offers Start/Stop Sender, and lets their packet rate
 and broadcast settings be changed through the Settings panel. Receiver settings
 include the sender MAC filter used to focus CSI scoring on that known source.
+Receiver status also shows a protected source-MAC diagnostic panel below the
+normal CSI MAC histogram so the sender can still be tracked even when louder
+router or household devices dominate the histogram.
 
 The node settings panel can also read and save an ESP32 node's persisted
 stillness calibration baseline. That baseline lives on the ESP32 in NVS, so a

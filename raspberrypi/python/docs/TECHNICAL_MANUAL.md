@@ -1,6 +1,6 @@
 # Python Worker Technical Manual
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 ## Responsibilities
 
@@ -36,9 +36,14 @@ sender ESP32 devices. Important receiver fields include:
 - `accepted_csi_rate_hz`
 - `rssi`
 - `last_packet_ms`
+- `csi_source_mac_diagnostics`
 
 Unknown fields are preserved in the node snapshot so firmware can add values
 without breaking the worker.
+
+`csi_source_mac_diagnostics` is produced by receiver firmware `0.4.1` and later.
+The worker does not interpret it, but preserving it lets the PWA show the
+configured sender MAC counters from the receiver's live status payload.
 
 Sender nodes use the same `/espdata` ingestion path but identify themselves with
 `role: "csi_sender"`. They usually provide fields such as `enabled`,

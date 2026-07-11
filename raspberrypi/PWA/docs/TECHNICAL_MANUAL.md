@@ -1,6 +1,6 @@
 # PWA Technical Manual
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 ## Responsibilities
 
@@ -34,6 +34,12 @@ and hide receiver-only calibration controls. Receiver settings include
 `csi_source_mac` and `csi_source_filter_enabled`, which tell the receiver
 firmware to analyse CSI frames from the known sender instead of mixed household
 traffic.
+
+For receiver nodes running `0.4.1` or later, the status proxy also carries
+`csi_source_mac_diagnostics`. The PWA renders this beneath the CSI MAC
+histogram so operators can distinguish "sender MAC was seen by the CSI
+callback" from "sender MAC survived filtering, throttling, quality checks, and
+queue handoff."
 
 ## API Design
 

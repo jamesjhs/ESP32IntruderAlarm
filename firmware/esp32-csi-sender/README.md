@@ -1,6 +1,6 @@
 # ESP32 CSI Sender
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 Dedicated packet-source firmware for the ESP32IntruderAlarm CSI experiment.
 
@@ -8,12 +8,18 @@ This device is not a movement detector. It is a controlled 2.4 GHz Wi-Fi packet
 source. Receiver ESP32 devices can filter CSI to this sender's station MAC so
 they observe a more repeatable RF stimulus than mixed household/router traffic.
 
+`0.4.1` keeps the sender firmware behaviour from `0.4.0` and documents the new
+receiver-side source-MAC diagnostics. After flashing receiver nodes with
+`0.4.1`, use the sender `sta_mac` as the receiver `csi_source_mac`, then check
+the receiver's protected source-MAC panel to confirm whether sender frames are
+seen before filtering and accepted after CSI gates.
+
 ## Topology
 
 ```text
 Raspberry Pi --Ethernet--> household router/AP
                               |
-                              | normal 2.4 GHz Wi-Fi management
+                              | same 2.4 GHz Wi-Fi channel for management
                               v
 ESP32 CSI sender  ))) UDP broadcast packets ))) ESP32 CSI receivers
 ```

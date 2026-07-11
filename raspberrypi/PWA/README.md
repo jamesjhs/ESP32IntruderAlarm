@@ -1,6 +1,6 @@
 # TypeScript PWA/API Service
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 This app serves the Raspberry Pi web dashboard and browser-facing API on
 `127.0.0.1:3015`. It is the only service intended to sit behind Cloudflare
@@ -8,11 +8,17 @@ Tunnel and Cloudflare Access/App Login.
 
 ## Current Release Notes
 
-`0.4.0` adds PWA controls for the dedicated ESP32 CSI sender topology. Sender
-devices appear in the ESP32 Nodes card, can be started or stopped from the Pi,
-and can be configured through the same Settings flow as receiver nodes. Receiver
-settings now include a sender MAC filter so CSI scoring can focus on the known
-packet source.
+`0.4.1` adds a protected configured-source-MAC diagnostic panel beneath each
+receiver's CSI MAC histogram. The panel shows the sender MAC being tracked,
+whether filtering is enabled, how many matching CSI callbacks were seen before
+filtering, and how many survived the receiver's throttling, quality, and queue
+gates.
+
+The PWA continues to support the `0.4.0` dedicated ESP32 CSI sender topology:
+sender devices appear in the ESP32 Nodes card, can be started or stopped from
+the Pi, and can be configured through the same Settings flow as receiver nodes.
+Receiver settings include a sender MAC filter so CSI scoring can focus on the
+known packet source.
 
 ## Install
 

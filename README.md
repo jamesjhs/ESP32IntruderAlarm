@@ -6,12 +6,12 @@ The long-term goal is to place three ESP32 sensing nodes around a house and conn
 
 ## Current Version
 
-Current prototype version: `0.4.0`.
+Current prototype version: `0.4.1`.
 
-`0.4.0` adds a managed dedicated ESP32 CSI sender, lets receiver nodes filter
-CSI frames to that sender's source MAC, and exposes sender start/stop plus
-packet-rate tuning both on the sender's own page and through the Raspberry Pi
-PWA.
+`0.4.1` is a bugfix and diagnostics release for the controlled-source CSI
+topology. It keeps the dedicated ESP32 sender flow from `0.4.0`, and adds a
+protected configured-source-MAC diagnostic counter so the sender can be tracked
+even when the normal top-10 CSI MAC histogram evicts low-count devices.
 
 Recent implementation timeline:
 
@@ -28,6 +28,10 @@ Recent implementation timeline:
 - `0.4.0`: Dedicated `esp32-csi-sender` firmware, Pi-managed sender
   start/stop/configuration, receiver-side sender MAC filtering, and updated
   topology documentation for the controlled-packet CSI mode.
+- `0.4.1`: Protected configured-source-MAC diagnostics under the ESP32 and Pi
+  MAC histograms, including source frames seen before filtering and accepted
+  after callback gates, plus updated topology/readme notes for debugging sender
+  packet visibility.
 
 ## Why CSI?
 
@@ -87,7 +91,7 @@ Home 2.4/5 GHz router / LAN
         |
         +-- ESP32 receiver node 0: CSI capture + local JSON API
         +-- ESP32 receiver node 1: CSI capture + local JSON API
-        +-- ESP32 sender node: managed 2.4 GHz packet source
+        +-- ESP32 sender node: managed 2.4 GHz broadcast packet source
 ```
 
 The first firmware target should be an ESP-IDF application rather than Arduino-only code, because the CSI APIs and Espressif reference material are centred around ESP-IDF.
@@ -99,6 +103,14 @@ into that probe source. It joins the same 2.4 GHz network for Pi management, the
 emits steady UDP broadcast frames that receiver nodes can hear directly and
 filter by source MAC. The sender is not a clock synchronizer; it is a stable,
 known packet source that makes the receiver-side CSI experiment more repeatable.
+
+Receiver status now exposes both the normal evictable CSI MAC histogram and a
+protected configured-source-MAC diagnostic block. The protected block reports
+whether the configured sender MAC is being seen before source filtering, whether
+any of those frames survive the receiver's throttling/quality/queue gates, and
+when that source was last seen or accepted. This is the preferred way to debug a
+sender that appears briefly in the histogram but does not contribute usable CSI
+samples.
 
 ## Physical Placement And Environmental Constraints
 
@@ -921,6 +933,13 @@ orientation-dependent fades and burst-mode packet drops.
 
 This topology applies the upgrade budget to the boards that benefit from it and keeps
 the proven WROOM-32 firmware unchanged on the sender.
+
+For `0.4.1` tests, validate the topology from each receiver rather than relying
+only on the evictable CSI MAC histogram. The receiver and Pi dashboards expose a
+protected configured-source-MAC panel for the sender, showing whether frames are
+seen before filtering and whether they are accepted after the receiver CSI
+gates. This is the main diagnostic for confirming that the WROOM-32 sender is a
+usable CSI source for the upgraded receiver nodes.
 
 ## Reference Material
 

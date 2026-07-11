@@ -1,6 +1,6 @@
 # PWA How-To Guides
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 ## How To Check The Version API
 
@@ -37,6 +37,12 @@ For each receiver ESP32, open Settings, copy the sender `sta_mac` into `CSI
 sender MAC`, and enable `Filter to sender`. Calibrate the receivers while the
 sender is already running at the intended rate so the baseline includes the
 normal controlled packet stream.
+
+Open the receiver Settings/status modal after calibration and check the
+protected source-MAC diagnostics below the CSI MAC histogram. `Seen before
+filter` confirms the configured sender MAC is reaching the CSI callback.
+`Accepted after gates` confirms those packets are also passing the receiver's
+source filter, throttling, quality checks, and queue handoff.
 
 ## How To Build For Production
 

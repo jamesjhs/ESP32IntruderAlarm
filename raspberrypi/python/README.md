@@ -1,6 +1,6 @@
 # Python ESP32 Telemetry Worker
 
-Version: `0.4.0`
+Version: `0.4.1`
 
 The Python worker receives compact telemetry from ESP32 CSI receiver and sender
 nodes on LAN port `3005` at `/espdata`. It keeps live node state in memory,
@@ -11,6 +11,11 @@ In the controlled-source topology, the dedicated sender posts the same telemetry
 shape with `role: "csi_sender"`. The worker stores it like any other node so the
 PWA can proxy configuration requests to the sender, while movement history still
 comes from receiver payloads that report `movement_score`.
+
+`0.4.1` receiver firmware also reports `csi_source_mac_diagnostics` in live
+status. The worker does not interpret those counters; it preserves the receiver
+status payload so the PWA can show whether the configured sender MAC is seen
+before filtering and accepted after the receiver's CSI gates.
 
 ## Install
 
