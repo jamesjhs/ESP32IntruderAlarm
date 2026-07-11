@@ -190,8 +190,10 @@ static volatile int64_t csi_source_last_seen_us;
 static volatile int64_t csi_source_last_accepted_us;
 static volatile bool csi_last_mac_valid;
 static volatile bool csi_last_filtered_mac_valid;
+static volatile bool csi_last_accepted_mac_valid;
 static uint8_t csi_last_mac[6];
 static uint8_t csi_last_filtered_mac[6];
+static uint8_t csi_last_accepted_mac[6];
 static volatile bool calibration_requested;
 static volatile bool calibration_delete_requested;
 static volatile bool calibration_apply_requested;
@@ -1293,12 +1295,15 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     if (csi_queue != NULL) {
         csi_last_sample_us = now;
         csi_accepted_samples++;
-        if (configured_source_match) {
-            csi_source_accepted_after_gates_samples++;
-            csi_source_last_accepted_us = now;
-        }
         if (xQueueSend(csi_queue, &sample, 0) != pdTRUE) {
             csi_queue_drops++;
+        } else {
+            memcpy(csi_last_accepted_mac, info->mac, sizeof(csi_last_accepted_mac));
+            csi_last_accepted_mac_valid = true;
+            if (configured_source_match) {
+                csi_source_accepted_after_gates_samples++;
+                csi_source_last_accepted_us = now;
+            }
         }
     }
 }
@@ -1905,9 +1910,11 @@ static cJSON *status_to_json(void)
     calibration_data_t cal;
     uint8_t last_mac[6];
     uint8_t last_filtered_mac[6];
+    uint8_t last_accepted_mac[6];
     uint8_t configured_source_mac[6];
     bool last_mac_valid = csi_last_mac_valid;
     bool last_filtered_mac_valid = csi_last_filtered_mac_valid;
+    bool last_accepted_mac_valid = csi_last_accepted_mac_valid;
     bool configured_source_valid = csi_configured_source_mac_valid;
     uint32_t source_seen_before_filter = csi_source_seen_before_filter_samples;
     uint32_t source_accepted_after_gates = csi_source_accepted_after_gates_samples;
@@ -1915,6 +1922,7 @@ static cJSON *status_to_json(void)
     int64_t source_last_accepted_us = csi_source_last_accepted_us;
     memcpy(last_mac, csi_last_mac, sizeof(last_mac));
     memcpy(last_filtered_mac, csi_last_filtered_mac, sizeof(last_filtered_mac));
+    memcpy(last_accepted_mac, csi_last_accepted_mac, sizeof(last_accepted_mac));
     memcpy(configured_source_mac, csi_configured_source_mac, sizeof(configured_source_mac));
     csi_mac_histogram_entry_t mac_histogram[CSI_MAC_HISTOGRAM_LEN];
     portENTER_CRITICAL(&csi_mac_histogram_lock);
@@ -1957,14 +1965,19 @@ static cJSON *status_to_json(void)
     cJSON_AddBoolToObject(root, "csi_source_filter_enabled", cfg.csi_source_filter_enabled);
     char last_mac_text[18] = {0};
     char last_filtered_mac_text[18] = {0};
+    char last_accepted_mac_text[18] = {0};
     if (last_mac_valid) {
         format_mac(last_mac, last_mac_text, sizeof(last_mac_text));
     }
     if (last_filtered_mac_valid) {
         format_mac(last_filtered_mac, last_filtered_mac_text, sizeof(last_filtered_mac_text));
     }
+    if (last_accepted_mac_valid) {
+        format_mac(last_accepted_mac, last_accepted_mac_text, sizeof(last_accepted_mac_text));
+    }
     cJSON_AddStringToObject(root, "last_csi_mac", last_mac_valid ? last_mac_text : "");
     cJSON_AddStringToObject(root, "last_filtered_csi_mac", last_filtered_mac_valid ? last_filtered_mac_text : "");
+    cJSON_AddStringToObject(root, "last_accepted_csi_mac", last_accepted_mac_valid ? last_accepted_mac_text : "");
     cJSON *source_diag = cJSON_AddObjectToObject(root, "csi_source_mac_diagnostics");
     if (source_diag != NULL) {
         char configured_source_mac_text[18] = {0};
@@ -2422,7 +2435,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<dt>Graph Rate Max</dt><dd>The top of the sample-rate axis on the chart. It changes display scale only and is not saved.</dd>"
         "<dt>Graph Update Rate</dt><dd>How often this browser page polls and redraws. It affects the page only; high values add extra HTTP traffic.</dd>"
         "</dl></section>"
-        "<script>const keys=['sensing_state','sample_rate_hz','accepted_csi_rate_hz','movement_score','baseline_noise','trend_score','phase_score','confirm_windows','quiet_windows','movement_detected','calibration_persisted','calibration_windows','rssi','noise_floor','rejected_samples','filtered_samples','throttled_samples','queue_drops','last_packet_ms','accepted_samples','packet_count'];"
+        "<script>const keys=['sensing_state','sample_rate_hz','accepted_csi_rate_hz','movement_score','baseline_noise','trend_score','phase_score','confirm_windows','quiet_windows','movement_detected','calibration_persisted','calibration_windows','rssi','noise_floor','rejected_samples','filtered_samples','throttled_samples','queue_drops','last_csi_mac','last_filtered_csi_mac','last_accepted_csi_mac','last_packet_ms','accepted_samples','packet_count'];"
         "let cfg=null,scoreMax=10,rateMax=160,timer=null,busy=false,msgUntil=0,calWas=false;const hist=[];function setText(e,v,d=1){e.textContent=Number(v).toFixed(d)}"
         "function fmt(k,v){return (['movement_score','baseline_noise','trend_score','phase_score'].includes(k))?Number(v).toFixed(3):v}"
         "function idLabel(v){return String(Number(v)||0)}"

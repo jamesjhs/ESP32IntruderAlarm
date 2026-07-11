@@ -326,6 +326,16 @@ and API values in plain English.
   replaced by stillness calibration.
 - `last_packet_ms`: Milliseconds since the last accepted CSI packet. If this is
   large, the node is not currently receiving usable CSI.
+- `last_csi_mac`: Raw most recent MAC address reported by ESP-IDF before source
+  filtering. When `csi_source_filter_enabled` is true, this can still show
+  router or household-device MACs because it is captured before rejection.
+- `last_filtered_csi_mac`: Most recent MAC rejected by the source filter. When
+  filtering is working in a busy network, this often shows non-sender devices
+  and is useful evidence that the filter is actively discarding other traffic.
+- `last_accepted_csi_mac`: Most recent MAC that passed source filtering,
+  throttling, CSI length/SNR checks, spike filtering, and queue handoff into
+  feature processing. With `Filter to sender` enabled and usable sender frames
+  arriving, this should match `csi_source_mac`.
 - `accepted_samples`: Total accepted CSI samples since boot. This should climb
   steadily when the sender, Pi probe traffic, or router is generating useful
   traffic.
@@ -334,7 +344,8 @@ and API values in plain English.
   or household devices. `seen_before_filter` counts matching CSI callbacks
   before source filtering, while `accepted_after_gates` counts matching samples
   that survive the receiver's source filter, rate throttle, quality checks, and
-  queue handoff. If `seen_before_filter` climbs but `accepted_after_gates` does
+  queue handoff into feature processing. If `seen_before_filter` climbs but
+  `accepted_after_gates` does
   not, the sender is visible but later rejected or throttled. If neither climbs,
   ESP-IDF is not reporting CSI callbacks with the configured MAC.
 - `packet_count`: Total CSI samples included in completed detection windows

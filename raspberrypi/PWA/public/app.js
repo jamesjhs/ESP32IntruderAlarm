@@ -132,8 +132,9 @@ const NODE_STATUS_HELP = {
   last_packet_ms: "Milliseconds since the last accepted packet.",
   csi_source_mac: "Configured dedicated sender MAC used for CSI source filtering.",
   csi_source_filter_enabled: "Whether this receiver ignores CSI frames from other source MACs.",
-  last_csi_mac: "Most recent MAC address reported by ESP-IDF for a CSI frame before source filtering.",
+  last_csi_mac: "Raw most recent MAC address reported by ESP-IDF before source filtering. This can be a non-source MAC even when filtering is enabled.",
   last_filtered_csi_mac: "Most recent CSI MAC rejected because it did not match the configured source filter.",
+  last_accepted_csi_mac: "Most recent CSI MAC that passed filtering, throttling, quality checks, and queue handoff into feature processing.",
   source_filtered_samples: "CSI frames ignored because they did not come from the configured sender MAC.",
   calibrating: "Whether the node is currently recording a quiet baseline."
 };
@@ -732,6 +733,7 @@ function renderNodeStatus(status) {
     "csi_source_filter_enabled",
     "last_csi_mac",
     "last_filtered_csi_mac",
+    "last_accepted_csi_mac",
     "source_filtered_samples",
     "packet_count",
     "last_packet_ms",
