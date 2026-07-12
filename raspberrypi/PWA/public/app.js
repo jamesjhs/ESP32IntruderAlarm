@@ -257,6 +257,17 @@ function formatHours(value) {
   return Number.isInteger(number) ? `${number}h` : `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}h`;
 }
 
+/** Formats a node age into a compact, friendly "last seen" label. */
+function formatLastSeenAge(seconds) {
+  const age = asNumber(seconds);
+  if (age === null) return "unknown";
+  if (age < 5) return "just now";
+  if (age < 60) return `${Math.round(age)}s ago`;
+  if (age < 3600) return `${Math.round(age / 60)}m ago`;
+  if (age < 86400) return `${Math.round(age / 3600)}h ago`;
+  return `${Math.round(age / 86400)}d ago`;
+}
+
 /** Truncates form decimals before sending them to the ESP32 firmware. */
 function truncateToDecimals(value, decimals) {
   const number = asNumber(value);
@@ -435,8 +446,9 @@ function renderNodes(nodes) {
       nodeLink.href = node.ip ? `http://${node.ip}` : "#";
       nodeLink.target = "_blank";
       nodeLink.rel = "noopener noreferrer";
-      nodeLink.textContent = `ID ${node.device_id} · ${node.state}`;
-      nodeLink.title = node.ip ? `Open this ESP32 node at http://${node.ip}` : "Node IP unavailable";
+      const stateText = node.state === "stale" ? `stale · last seen ${formatLastSeenAge(node.last_seen_age_s)}` : node.state;
+      nodeLink.textContent = `ID ${node.device_id} · ${stateText}`;
+      nodeLink.title = node.ip ? `Open this ESP32 node at http://${node.ip}` : `Node IP unavailable; last seen ${formatLastSeenAge(node.last_seen_age_s)}`;
       if (!node.ip) {
         nodeLink.addEventListener("click", (event) => event.preventDefault());
       }

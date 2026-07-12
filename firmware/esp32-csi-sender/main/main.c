@@ -25,6 +25,8 @@
 #define CFG_NAMESPACE "sendercfg"
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
+#define WIFI_RECONNECT_INITIAL_BACKOFF_MS 1000
+#define WIFI_RECONNECT_MAX_BACKOFF_MS 60000
 
 #define MAX_POST_BODY 1024
 #define CAPTIVE_DNS_PORT 53
@@ -86,12 +88,20 @@ static sender_config_t g_config;
 static sender_status_t g_status;
 static bool setup_mode_active;
 static int wifi_retry_count;
+static TaskHandle_t wifi_reconnect_task_handle;
 
 static uint32_t clamp_u32(uint32_t value, uint32_t min, uint32_t max)
 {
     if (value < min) return min;
     if (value > max) return max;
     return value;
+}
+
+static void increment_u32_saturated(uint32_t *value)
+{
+    if (*value < UINT32_MAX) {
+        (*value)++;
+    }
 }
 
 static bool valid_ipv4_or_empty(const char *value)
@@ -623,15 +633,15 @@ static void sender_task(void *arg)
             int sent = sendto(sock, payload, cfg.payload_size, 0, (struct sockaddr *)&dest, sizeof(dest));
             xSemaphoreTake(state_lock, portMAX_DELAY);
             if (sent > 0) {
-                g_status.packets_sent++;
+                increment_u32_saturated(&g_status.packets_sent);
                 g_status.last_send_ms = (uint32_t)((esp_timer_get_time() - g_status.boot_us) / 1000LL);
             } else {
-                g_status.send_errors++;
+                increment_u32_saturated(&g_status.send_errors);
             }
             xSemaphoreGive(state_lock);
         } else {
             xSemaphoreTake(state_lock, portMAX_DELAY);
-            g_status.send_errors++;
+            increment_u32_saturated(&g_status.send_errors);
             xSemaphoreGive(state_lock);
         }
         vTaskDelay(pdMS_TO_TICKS(1000 / cfg.packet_rate_hz));
@@ -699,6 +709,15 @@ static void telemetry_task(void *arg)
     }
 }
 
+static void wifi_reconnect_task(void *arg)
+{
+    uint32_t delay_ms = (uint32_t)(uintptr_t)arg;
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    wifi_reconnect_task_handle = NULL;
+    esp_wifi_connect();
+    vTaskDelete(NULL);
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
@@ -708,17 +727,32 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         xSemaphoreTake(state_lock, portMAX_DELAY);
         g_status.sta_connected = false;
         xSemaphoreGive(state_lock);
-        if (wifi_retry_count < 10) {
-            wifi_retry_count++;
-            esp_wifi_connect();
-        } else {
-            xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
+        wifi_retry_count++;
+        uint32_t backoff_ms = WIFI_RECONNECT_INITIAL_BACKOFF_MS;
+        uint32_t shift = (uint32_t)(wifi_retry_count - 1);
+        if (shift > 10U) {
+            shift = 10U;
+        }
+        backoff_ms <<= shift;
+        if (backoff_ms > WIFI_RECONNECT_MAX_BACKOFF_MS) {
+            backoff_ms = WIFI_RECONNECT_MAX_BACKOFF_MS;
+        }
+        if (wifi_reconnect_task_handle == NULL) {
+            uint32_t delay_ms = backoff_ms;
+            if (xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 2048, (void *)(uintptr_t)delay_ms, 4, &wifi_reconnect_task_handle) != pdPASS) {
+                esp_wifi_connect();
+            }
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         char ip[16];
         snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
         wifi_retry_count = 0;
+        if (wifi_reconnect_task_handle != NULL) {
+            TaskHandle_t task = wifi_reconnect_task_handle;
+            wifi_reconnect_task_handle = NULL;
+            vTaskDelete(task);
+        }
         uint8_t primary = 0;
         wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
         esp_wifi_get_channel(&primary, &secondary);

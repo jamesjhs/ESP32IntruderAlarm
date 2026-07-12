@@ -30,6 +30,8 @@
 #define CAL_NAMESPACE "nodecal"
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
+#define WIFI_RECONNECT_INITIAL_BACKOFF_MS 1000
+#define WIFI_RECONNECT_MAX_BACKOFF_MS 60000
 
 #ifndef ESP32_INTRUDER_BOARD_VARIANT
 #define ESP32_INTRUDER_BOARD_VARIANT "ESP32-WROOM-32"
@@ -196,6 +198,7 @@ static httpd_handle_t http_server;
 static esp_netif_t *sta_netif;
 static esp_netif_t *ap_netif;
 static int wifi_retry_count;
+static TaskHandle_t wifi_reconnect_task_handle;
 static bool setup_mode_active;
 static bool config_needs_auto_name;
 static bool auto_name_started;
@@ -314,6 +317,28 @@ static uint32_t clamp_u32(uint32_t value, uint32_t min, uint32_t max)
         return max;
     }
     return value;
+}
+
+static void increment_u32_saturated(uint32_t *value)
+{
+    if (*value < UINT32_MAX) {
+        (*value)++;
+    }
+}
+
+static void increment_volatile_u32_saturated(volatile uint32_t *value)
+{
+    if (*value < UINT32_MAX) {
+        (*value)++;
+    }
+}
+
+static uint32_t add_u32_saturated(uint32_t value, uint32_t increment)
+{
+    if (UINT32_MAX - value < increment) {
+        return UINT32_MAX;
+    }
+    return value + increment;
 }
 
 /**
@@ -559,9 +584,7 @@ static void update_csi_mac_histogram(const uint8_t mac[6], int64_t now_us)
     for (int i = 0; i < CSI_MAC_HISTOGRAM_LEN; i++) {
         csi_mac_histogram_entry_t *entry = &csi_mac_histogram[i];
         if (entry->valid && memcmp(entry->mac, mac, sizeof(entry->mac)) == 0) {
-            if (entry->count < UINT32_MAX) {
-                entry->count++;
-            }
+            increment_u32_saturated(&entry->count);
             entry->last_seen_us = now_us;
             portEXIT_CRITICAL(&csi_mac_histogram_lock);
             return;
@@ -1222,7 +1245,7 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 {
     (void)ctx;
     if (info == NULL || info->buf == NULL || info->len == 0) {
-        csi_rejected_samples++;
+        increment_volatile_u32_saturated(&csi_rejected_samples);
         return;
     }
 
@@ -1233,32 +1256,32 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     bool configured_source_match = csi_configured_source_mac_valid &&
                                    memcmp(info->mac, csi_configured_source_mac, sizeof(csi_configured_source_mac)) == 0;
     if (configured_source_match) {
-        csi_source_seen_before_filter_samples++;
+        increment_volatile_u32_saturated(&csi_source_seen_before_filter_samples);
         csi_source_last_seen_us = now;
     }
 
     if (csi_source_filter_enabled && memcmp(info->mac, csi_source_mac, sizeof(csi_source_mac)) != 0) {
         memcpy(csi_last_filtered_mac, info->mac, sizeof(csi_last_filtered_mac));
         csi_last_filtered_mac_valid = true;
-        csi_source_filtered_samples++;
+        increment_volatile_u32_saturated(&csi_source_filtered_samples);
         return;
     }
 
     int64_t min_interval_us = csi_min_interval_us;
     if (min_interval_us > 0 && csi_last_sample_us > 0 && now - csi_last_sample_us < min_interval_us) {
-        csi_throttled_samples++;
+        increment_volatile_u32_saturated(&csi_throttled_samples);
         return;
     }
 
     int start = info->first_word_invalid ? 4 : 0;
     int len = info->len;
     if (len - start < MIN_CSI_BYTES) {
-        csi_rejected_samples++;
+        increment_volatile_u32_saturated(&csi_rejected_samples);
         return;
     }
 
     if (info->rx_ctrl.noise_floor != 0 && info->rx_ctrl.rssi - info->rx_ctrl.noise_floor < MIN_CSI_SNR_DB) {
-        csi_rejected_samples++;
+        increment_volatile_u32_saturated(&csi_rejected_samples);
         return;
     }
 
@@ -1281,7 +1304,7 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     }
 
     if (pair_count < (MIN_CSI_BYTES / 2) || mean_power <= 0.0f) {
-        csi_rejected_samples++;
+        increment_volatile_u32_saturated(&csi_rejected_samples);
         return;
     }
 
@@ -1302,7 +1325,7 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         float limit = PACKET_SPIKE_SIGMA * fmaxf(filter_deviation, 0.05f);
         if (filter_warmup > 20 && diff > limit) {
             feature = feature > filter_center ? filter_center + limit : filter_center - limit;
-            csi_filtered_samples++;
+            increment_volatile_u32_saturated(&csi_filtered_samples);
         }
         filter_center = (filter_center * 0.995f) + (feature * 0.005f);
         filter_deviation = (filter_deviation * 0.995f) + (fabsf(feature - filter_center) * 0.005f);
@@ -1321,14 +1344,14 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 
     if (csi_queue != NULL) {
         csi_last_sample_us = now;
-        csi_accepted_samples++;
+        increment_volatile_u32_saturated(&csi_accepted_samples);
         if (xQueueSend(csi_queue, &sample, 0) != pdTRUE) {
-            csi_queue_drops++;
+            increment_volatile_u32_saturated(&csi_queue_drops);
         } else {
             memcpy(csi_last_accepted_mac, info->mac, sizeof(csi_last_accepted_mac));
             csi_last_accepted_mac_valid = true;
             if (configured_source_match) {
-                csi_source_accepted_after_gates_samples++;
+                increment_volatile_u32_saturated(&csi_source_accepted_after_gates_samples);
                 csi_source_last_accepted_us = now;
             }
         }
@@ -1377,6 +1400,15 @@ static void disable_csi_capture(void)
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_promiscuous(false));
 }
 
+static void wifi_reconnect_task(void *arg)
+{
+    uint32_t delay_ms = (uint32_t)(uintptr_t)arg;
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    wifi_reconnect_task_handle = NULL;
+    esp_wifi_connect();
+    vTaskDelete(NULL);
+}
+
 /**
  * Introduction:
  * Handles Wi-Fi and IP lifecycle events for both station and setup modes. It
@@ -1402,18 +1434,34 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         g_status.sta_connected = false;
         xSemaphoreGive(state_lock);
 
-        if (wifi_retry_count < 10) {
-            wifi_retry_count++;
-            esp_wifi_connect();
-            ESP_LOGW(TAG, "Wi-Fi disconnected, retrying");
-        } else {
-            xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
+        wifi_retry_count++;
+        uint32_t backoff_ms = WIFI_RECONNECT_INITIAL_BACKOFF_MS;
+        uint32_t shift = (uint32_t)(wifi_retry_count - 1);
+        if (shift > 10U) {
+            shift = 10U;
         }
+        backoff_ms <<= shift;
+        if (backoff_ms > WIFI_RECONNECT_MAX_BACKOFF_MS) {
+            backoff_ms = WIFI_RECONNECT_MAX_BACKOFF_MS;
+        }
+        if (wifi_reconnect_task_handle == NULL) {
+            uint32_t delay_ms = backoff_ms;
+            if (xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 2048, (void *)(uintptr_t)delay_ms, 4, &wifi_reconnect_task_handle) != pdPASS) {
+                ESP_LOGW(TAG, "Wi-Fi reconnect task allocation failed, retrying immediately");
+                esp_wifi_connect();
+            }
+        }
+        ESP_LOGW(TAG, "Wi-Fi disconnected, reconnect attempt %d scheduled in %lu ms", wifi_retry_count, (unsigned long)backoff_ms);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         char ip[16];
         snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
         wifi_retry_count = 0;
+        if (wifi_reconnect_task_handle != NULL) {
+            TaskHandle_t task = wifi_reconnect_task_handle;
+            wifi_reconnect_task_handle = NULL;
+            vTaskDelete(task);
+        }
         xSemaphoreTake(state_lock, portMAX_DELAY);
         strlcpy(g_status.ip, ip, sizeof(g_status.ip));
         g_status.sta_connected = true;
@@ -1782,7 +1830,7 @@ static void publish_window(float mean_energy, float variance, float mean_shape, 
     g_status.phase_score = phase_score;
     g_status.movement_detected = g_status.state == SENSE_BOOST || detection_count >= DETECT_REQUIRED_WINDOWS;
     movement_led_set(g_status.movement_detected);
-    g_status.packet_count += window_packets;
+    g_status.packet_count = add_u32_saturated(g_status.packet_count, window_packets);
     g_status.last_window_packets = window_packets;
     g_status.rejected_samples = csi_rejected_samples;
     g_status.source_filtered_samples = csi_source_filtered_samples;
