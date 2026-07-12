@@ -1,6 +1,6 @@
 # Python Worker How-To Guides
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 ## How To Start The Worker
 
@@ -34,3 +34,7 @@ posted telemetry to `/espdata`. Sender entries identify themselves with `role:
 "csi_sender"` and carry operational fields such as `enabled`, `packet_rate_hz`,
 `sta_mac`, and `broadcast_ip`; receiver entries carry movement and CSI health
 fields such as `movement_score`, `sample_rate_hz`, and `rssi`.
+
+ESP32-S3-WROOM-1U receivers built from `firmware/esp32-s3-wroom` also report
+`board_variant: "ESP32-S3-WROOM-1U"` and `hardware_profile: "s3-enhanced"` in
+their preserved payload.

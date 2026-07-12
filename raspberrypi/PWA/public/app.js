@@ -103,6 +103,8 @@ const SECURITY_LABELS = {
 
 const NODE_STATUS_HELP = {
   role: "Firmware role reported by the ESP32: receiver or dedicated CSI sender.",
+  board_variant: "Receiver hardware variant reported by the ESP32 firmware.",
+  hardware_profile: "Firmware capability profile compiled for this receiver build.",
   ip: "Current LAN IP address reported by the ESP32.",
   sta_mac: "Station MAC address of the ESP32. Receivers use the sender MAC for source filtering.",
   enabled: "Whether the dedicated sender is currently emitting broadcast stimulus packets.",
@@ -719,6 +721,9 @@ function renderSourceMacDiagnostics(status) {
 /** Renders the selected ESP32 node's live status fields in the modal. */
 function renderNodeStatus(status) {
   const receiverKeys = [
+    "role",
+    "board_variant",
+    "hardware_profile",
     "sensing_state",
     "sample_rate_hz",
     "accepted_csi_rate_hz",
@@ -788,9 +793,22 @@ function setFormDecimal(form, name, value, decimals) {
   form.elements[name].value = formatTruncated(value, decimals);
 }
 
+/** Applies receiver capability limits reported by the firmware config API. */
+function applyReceiverCapabilityLimits(config) {
+  const idleInput = nodeConfigFormEl.elements.idle_rate_hz;
+  const boostInput = nodeConfigFormEl.elements.boost_rate_hz;
+  if (idleInput && config?.max_idle_rate_hz) {
+    idleInput.max = String(config.max_idle_rate_hz);
+  }
+  if (boostInput && config?.max_boost_rate_hz) {
+    boostInput.max = String(config.max_boost_rate_hz);
+  }
+}
+
 /** Populates the ESP32 configuration form from the node /api/config response. */
 function populateNodeConfigForm(config) {
   attachNodeSettingsHelp();
+  applyReceiverCapabilityLimits(config);
   nodeConfigFormEl.elements.device_id.value = config.device_id ?? "";
   nodeConfigFormEl.elements.name.value = config.name ?? "";
   nodeConfigFormEl.elements.sta_mac.value = config.sta_mac ?? "";

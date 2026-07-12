@@ -1,6 +1,6 @@
 # PWA Explanation Manual
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 The PWA is the phone and desktop dashboard for the alarm.
 
@@ -16,6 +16,12 @@ include the sender MAC filter used to focus CSI scoring on that known source.
 Receiver status also shows a protected source-MAC diagnostic panel below the
 normal CSI MAC histogram so the sender can still be tracked even when louder
 router or household devices dominate the histogram.
+
+The PWA also shows the receiver board variant and hardware profile reported by
+the firmware. That matters in `0.5.1` because ESP32-S3-WROOM-1U receivers use a
+separate `s3-enhanced` firmware target with higher CSI queue and sample-rate
+ceilings, while older ESP32-WROOM-32 receivers remain supported by the standard
+target.
 
 The node settings panel can also read and save an ESP32 node's persisted
 stillness calibration baseline. That baseline lives on the ESP32 in NVS, so a

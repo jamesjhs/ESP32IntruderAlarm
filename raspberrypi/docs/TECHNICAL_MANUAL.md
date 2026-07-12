@@ -1,6 +1,6 @@
 # Raspberry Pi Technical Manual
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 ## Architecture
 
@@ -34,12 +34,13 @@ receiver and sender ESP32 devices. Sender telemetry includes `role:
 `csi_source_filter_enabled` and set `csi_source_mac` so CSI scoring only uses
 frames from that known packet source.
 
-Version `0.4.1` adds receiver diagnostics for that configured source MAC. The
-normal CSI MAC histogram remains a useful top-10 view of all observed CSI MACs,
-but it can evict low-count devices. Receiver status now also includes
-`csi_source_mac_diagnostics`, a protected counter block for the configured
-sender MAC with `seen_before_filter`, `accepted_after_gates`, `last_seen_ms`,
-and `last_accepted_ms`.
+Version `0.5.1` adds a separate ESP32-S3-WROOM-1U receiver firmware target that
+shares source code with the standard ESP32-WROOM-32 receiver target. Receiver
+status/config payloads now identify `role: "csi_receiver"`, `board_variant`,
+and `hardware_profile`; the S3 build reports `ESP32-S3-WROOM-1U` and
+`s3-enhanced`. The existing `csi_source_mac_diagnostics` block remains the
+protected counter block for the configured sender MAC with `seen_before_filter`,
+`accepted_after_gates`, `last_seen_ms`, and `last_accepted_ms`.
 
 ## Ports
 

@@ -1,6 +1,6 @@
 # Python Worker Explanation Manual
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 The Python worker is the local listener for the ESP32 devices.
 
@@ -22,7 +22,9 @@ keep Wi-Fi traffic predictable for CSI sensing, but the dedicated ESP32 sender
 is the cleaner controlled-source approach because receiver firmware can filter
 CSI to the sender's known MAC address.
 
-In `0.4.1`, receiver status includes protected diagnostics for that configured
-sender MAC. The worker simply preserves those fields in the live node snapshot;
-the PWA displays them so you can tell whether sender packets are seen before
-filtering and accepted after the receiver's CSI gates.
+In `0.5.1`, receiver status includes the board variant, hardware profile, and
+protected diagnostics for that configured sender MAC. The worker simply
+preserves those fields in the live node snapshot; the PWA displays them so you
+can tell whether a receiver is the ESP32-S3-WROOM-1U enhanced build and whether
+sender packets are seen before filtering and accepted after the receiver's CSI
+gates.

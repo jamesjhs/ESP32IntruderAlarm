@@ -1,6 +1,6 @@
 # ESP32 CSI Node
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 Standalone ESP-IDF firmware for an ESP32 Wi-Fi CSI movement sensor node.
 
@@ -15,9 +15,25 @@ configuration.
 
 ## Current Release Notes
 
-`0.4.1` adds protected configured-source-MAC diagnostics for controlled-source
-CSI debugging. Receiver nodes now keep non-evicting counters for the configured
-sender MAC, alongside the existing top-10 CSI MAC histogram:
+`0.5.1` keeps this folder as the backward-compatible ESP32-WROOM-32 receiver
+build and adds a separate S3 receiver build in `../esp32-s3-wroom`. Both receiver
+targets compile the same `main.c`, so future receiver functions should be added
+once and picked up by both builds.
+
+The standard build keeps the existing WROOM-32 capacity profile:
+
+- CSI queue length: `256` samples
+- Idle CSI ingest ceiling: `100 Hz`
+- Boost CSI ingest ceiling: `250 Hz`
+- Default boost rate: `80 Hz`
+
+The S3 build reports `board_variant: "ESP32-S3-WROOM-1U"` and enables the
+enhanced 512-sample queue, 160 Hz idle ceiling, 400 Hz boost ceiling, 120 Hz
+default boost rate, and larger task stacks.
+
+Protected configured-source-MAC diagnostics from the previous controlled-source
+work remain available. Receiver nodes keep non-evicting counters for the
+configured sender MAC, alongside the existing top-10 CSI MAC histogram:
 
 - `seen_before_filter`: CSI callbacks whose reported MAC matches the configured
   sender before source filtering and quality gates.
@@ -41,6 +57,15 @@ toolchain are on `PATH`.
 ```powershell
 cd C:\GitHub\ESP32IntruderAlarm\firmware\esp32-csi-node
 idf.py set-target esp32
+idf.py build
+idf.py -p COMx flash monitor
+```
+
+For ESP32-S3-WROOM-1U receiver boards, use the separate target:
+
+```powershell
+cd C:\GitHub\ESP32IntruderAlarm\firmware\esp32-s3-wroom
+idf.py set-target esp32s3
 idf.py build
 idf.py -p COMx flash monitor
 ```
@@ -214,7 +239,8 @@ The firmware clamps values before storing them:
 - `csi_source_filter_enabled`: true to ignore CSI frames from other sources
 - `pi_post_interval_ms`: 1000-30000 ms
 - `idle_rate_hz`: 10-100 Hz
-- `boost_rate_hz`: 10-250 Hz
+- `boost_rate_hz`: 10-250 Hz on the standard ESP32-WROOM-32 build; 10-400 Hz
+  on the ESP32-S3-WROOM-1U build
 - `movement_threshold`: 1.0-10.0
 - `settle_threshold`: 0.2 to `movement_threshold`
 - `motion_sensitivity`: 0.3-3.0
@@ -223,6 +249,10 @@ The firmware clamps values before storing them:
 - `feature_window_ms`: 0-1000 ms. This is the analysis window used to group
   accepted CSI samples before one movement score is calculated; `0` is treated
   as a near-immediate 1 ms window internally, not as "score every event".
+
+The standard ESP32-WROOM-32 build clamps `boost_rate_hz` to 250 Hz. The
+ESP32-S3-WROOM-1U build clamps it to 400 Hz and reports `max_boost_rate_hz`,
+`max_idle_rate_hz`, and `csi_queue_len` from `GET /api/config`.
 
 When `device_id` is changed without explicitly sending `name`, the node
 regenerates its friendly name as `Movement%02X`, for example decimal device ID

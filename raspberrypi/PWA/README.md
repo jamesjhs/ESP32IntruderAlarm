@@ -1,6 +1,6 @@
 # TypeScript PWA/API Service
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 This app serves the Raspberry Pi web dashboard and browser-facing API on
 `127.0.0.1:3015`. It is the only service intended to sit behind Cloudflare
@@ -8,7 +8,12 @@ Tunnel and Cloudflare Access/App Login.
 
 ## Current Release Notes
 
-`0.4.1` adds a protected configured-source-MAC diagnostic panel beneath each
+`0.5.1` adds ESP32-S3-WROOM-1U receiver awareness to the dashboard. Receiver
+status panels now show the firmware role, board variant, and hardware profile,
+so S3 receivers built from `firmware/esp32-s3-wroom` identify themselves as
+`ESP32-S3-WROOM-1U` with the `s3-enhanced` profile.
+
+The protected configured-source-MAC diagnostic panel remains beneath each
 receiver's CSI MAC histogram. The panel shows the sender MAC being tracked,
 whether filtering is enabled, how many matching CSI callbacks were seen before
 filtering, and how many survived the receiver's throttling, quality, and queue

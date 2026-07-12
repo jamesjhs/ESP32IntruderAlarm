@@ -6,12 +6,13 @@ The long-term goal is to place ESP32 sensing nodes (and/or a sending node) aroun
 
 ## Current Version
 
-Current prototype version: `0.4.1`.
+Current prototype version: `0.5.1`.
 
-`0.4.1` is a bugfix and diagnostics release for the controlled-source CSI
-topology. It keeps the dedicated ESP32 sender flow from `0.4.0`, and adds a
-protected configured-source-MAC diagnostic counter so the sender can be tracked
-even when the normal top-10 CSI MAC histogram evicts low-count devices.
+`0.5.1` adds a separate ESP32-S3-WROOM-1U receiver build with an enhanced CSI
+capacity profile while keeping the original ESP32-WROOM-32 receiver and sender
+builds backward-compatible. The S3 build compiles the same receiver source as
+the standard build, so future receiver features and fixes should land in both
+targets together.
 
 Recent implementation timeline:
 
@@ -28,10 +29,10 @@ Recent implementation timeline:
 - `0.4.0`: Dedicated `esp32-csi-sender` firmware, Pi-managed sender
   start/stop/configuration, receiver-side sender MAC filtering, and updated
   topology documentation for the controlled-packet CSI mode.
-- `0.4.1`: Protected configured-source-MAC diagnostics under the ESP32 and Pi
-  MAC histograms, including source frames seen before filtering and accepted
-  after callback gates, plus updated topology/readme notes for debugging sender
-  packet visibility.
+- `0.5.1`: Separate `firmware/esp32-s3-wroom` receiver target for
+  ESP32-S3-WROOM-1U boards, shared receiver source between WROOM-32 and S3
+  builds, S3-enhanced CSI queue/rate/task-stack limits, and board/profile
+  reporting in receiver status/config APIs.
 
 ## Why CSI?
 
@@ -611,6 +612,8 @@ Recommended repository shape:
 ESP32IntruderAlarm/
   firmware/
     esp32-csi-node/
+    esp32-s3-wroom/
+    esp32-csi-sender/
   services/
     web/
       package.json
@@ -785,10 +788,12 @@ Success criteria:
 
 ### ESP32 Board Variant Assessment for CSI Sensing
 
-The project currently targets ESP32-WROOM-32 DevKit1 boards. This section assesses
-the practical limitations of those boards for CSI motion sensing and compares them
-with two upgrade candidates — the ESP32-S3-WROOM-1 and the ESP32-C6 — in terms of
-reliability and signal-to-noise ratio.
+The project now keeps the original ESP32-WROOM-32 receiver build for backward
+compatibility and adds a separate ESP32-S3-WROOM-1U receiver build at
+`firmware/esp32-s3-wroom`. This section assesses the practical limitations of
+the WROOM-32 boards for CSI motion sensing and compares them with two upgrade
+candidates — the ESP32-S3-WROOM-1/1U and the ESP32-C6 — in terms of reliability
+and signal-to-noise ratio.
 
 #### Baseline: ESP32-WROOM-32 DevKit1
 
@@ -907,6 +912,22 @@ baselines in the same way that moving any board does.
 
 #### Receiver Role: ESP32-S3-WROOM-1U
 
+Use `firmware/esp32-s3-wroom` for the S3 receiver build:
+
+```powershell
+cd C:\GitHub\ESP32IntruderAlarm\firmware\esp32-s3-wroom
+idf.py set-target esp32s3
+idf.py build
+idf.py -p COMx flash monitor
+```
+
+This target compiles the same receiver firmware source as
+`firmware/esp32-csi-node`, but with the `ESP32-S3-WROOM-1U` board variant,
+`s3-enhanced` hardware profile, a 512-sample CSI queue, 160 Hz idle ingest
+ceiling, 400 Hz boost ingest ceiling, 120 Hz default boost rate, and larger
+receiver task stacks. The standard `firmware/esp32-csi-node` target remains the
+ESP32-WROOM-32-compatible build.
+
 The external antenna provides two compounding benefits on the receiver side:
 
 - **Repositionable antenna**: the board can be mounted inside an enclosure or fixed
@@ -934,7 +955,7 @@ orientation-dependent fades and burst-mode packet drops.
 This topology applies the upgrade budget to the boards that benefit from it and keeps
 the proven WROOM-32 firmware unchanged on the sender.
 
-For `0.4.1` tests, validate the topology from each receiver rather than relying
+For `0.5.1` tests, validate the topology from each receiver rather than relying
 only on the evictable CSI MAC histogram. The receiver and Pi dashboards expose a
 protected configured-source-MAC panel for the sender, showing whether frames are
 seen before filtering and whether they are accepted after the receiver CSI

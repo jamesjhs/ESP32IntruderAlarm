@@ -1,6 +1,6 @@
 # PWA How-To Guides
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 ## How To Check The Version API
 
@@ -43,6 +43,11 @@ protected source-MAC diagnostics below the CSI MAC histogram. `Seen before
 filter` confirms the configured sender MAC is reaching the CSI callback.
 `Accepted after gates` confirms those packets are also passing the receiver's
 source filter, throttling, quality checks, and queue handoff.
+
+For ESP32-S3-WROOM-1U receivers, flash `firmware/esp32-s3-wroom` instead of
+`firmware/esp32-csi-node`. In the receiver status modal, confirm the board
+fields show `ESP32-S3-WROOM-1U` and `s3-enhanced` before tuning higher S3-only
+sample-rate ceilings.
 
 ## How To Build For Production
 

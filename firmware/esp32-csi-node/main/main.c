@@ -31,12 +31,39 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
 
-#define CSI_QUEUE_LEN 256
+#ifndef ESP32_INTRUDER_BOARD_VARIANT
+#define ESP32_INTRUDER_BOARD_VARIANT "ESP32-WROOM-32"
+#endif
+#ifndef ESP32_INTRUDER_HARDWARE_PROFILE
+#define ESP32_INTRUDER_HARDWARE_PROFILE "standard"
+#endif
+#ifndef ESP32_INTRUDER_CSI_QUEUE_LEN
+#define ESP32_INTRUDER_CSI_QUEUE_LEN 256
+#endif
+#ifndef ESP32_INTRUDER_MAX_IDLE_RATE_HZ
+#define ESP32_INTRUDER_MAX_IDLE_RATE_HZ 100
+#endif
+#ifndef ESP32_INTRUDER_MAX_BOOST_RATE_HZ
+#define ESP32_INTRUDER_MAX_BOOST_RATE_HZ 250
+#endif
+#ifndef ESP32_INTRUDER_DEFAULT_BOOST_RATE_HZ
+#define ESP32_INTRUDER_DEFAULT_BOOST_RATE_HZ 80
+#endif
+#ifndef ESP32_INTRUDER_CSI_AGGREGATION_STACK
+#define ESP32_INTRUDER_CSI_AGGREGATION_STACK 4096
+#endif
+#ifndef ESP32_INTRUDER_PI_TELEMETRY_STACK
+#define ESP32_INTRUDER_PI_TELEMETRY_STACK 4096
+#endif
+
+#define CSI_QUEUE_LEN ESP32_INTRUDER_CSI_QUEUE_LEN
+#define STRINGIFY_VALUE(value) #value
+#define STRINGIFY(value) STRINGIFY_VALUE(value)
 #define MAX_POST_BODY 1024
 #define MIN_IDLE_RATE_HZ 10
-#define MAX_IDLE_RATE_HZ 100
+#define MAX_IDLE_RATE_HZ ESP32_INTRUDER_MAX_IDLE_RATE_HZ
 #define MIN_BOOST_RATE_HZ 10
-#define MAX_BOOST_RATE_HZ 250
+#define MAX_BOOST_RATE_HZ ESP32_INTRUDER_MAX_BOOST_RATE_HZ
 #define MIN_WINDOW_MS 0
 #define MAX_WINDOW_MS 1000
 #define MIN_BOOST_MS 0
@@ -65,7 +92,7 @@
 #define NODE_DISCOVERY_TIMEOUT_MS 180
 #define NODE_DISCOVERY_STACK 4096
 #define DNS_TASK_STACK 3072
-#define PI_TELEMETRY_STACK 4096
+#define PI_TELEMETRY_STACK ESP32_INTRUDER_PI_TELEMETRY_STACK
 #define MOVEMENT_LED_GPIO GPIO_NUM_2
 #define MOVEMENT_LED_ON_LEVEL 1
 #define MOVEMENT_LED_OFF_LEVEL 0
@@ -643,7 +670,7 @@ static void default_config(node_config_t *cfg)
     cfg->csi_source_filter_enabled = false;
     cfg->pi_post_interval_ms = 5000;
     cfg->idle_rate_hz = 10;
-    cfg->boost_rate_hz = 80;
+    cfg->boost_rate_hz = ESP32_INTRUDER_DEFAULT_BOOST_RATE_HZ;
     cfg->movement_threshold = 3.0f;
     cfg->settle_threshold = 1.2f;
     cfg->motion_sensitivity = 1.0f;
@@ -1948,6 +1975,9 @@ static cJSON *status_to_json(void)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "device_id", cfg.device_id);
     cJSON_AddStringToObject(root, "name", cfg.name);
+    cJSON_AddStringToObject(root, "role", "csi_receiver");
+    cJSON_AddStringToObject(root, "board_variant", ESP32_INTRUDER_BOARD_VARIANT);
+    cJSON_AddStringToObject(root, "hardware_profile", ESP32_INTRUDER_HARDWARE_PROFILE);
     cJSON_AddStringToObject(root, "ip", status.ip);
     cJSON_AddNumberToObject(root, "uptime_ms", (esp_timer_get_time() - status.boot_us) / 1000LL);
     cJSON_AddNumberToObject(root, "sample_rate_hz", status.sample_rate_hz);
@@ -2170,6 +2200,12 @@ static cJSON *config_to_json(void)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "device_id", cfg.device_id);
     cJSON_AddStringToObject(root, "name", cfg.name);
+    cJSON_AddStringToObject(root, "role", "csi_receiver");
+    cJSON_AddStringToObject(root, "board_variant", ESP32_INTRUDER_BOARD_VARIANT);
+    cJSON_AddStringToObject(root, "hardware_profile", ESP32_INTRUDER_HARDWARE_PROFILE);
+    cJSON_AddNumberToObject(root, "max_idle_rate_hz", MAX_IDLE_RATE_HZ);
+    cJSON_AddNumberToObject(root, "max_boost_rate_hz", MAX_BOOST_RATE_HZ);
+    cJSON_AddNumberToObject(root, "csi_queue_len", CSI_QUEUE_LEN);
     cJSON_AddStringToObject(root, "pi_ip", cfg.pi_ip);
     cJSON_AddNumberToObject(root, "pi_port", cfg.pi_port);
     cJSON_AddStringToObject(root, "pi_api_path", cfg.pi_api_path);
@@ -2378,13 +2414,13 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<label class=\"control\"><span>Detect Threshold</span><b id=\"mv\">3.0</b><input id=\"m\" type=\"range\" min=\"1\" max=\"10\" step=\"0.1\"></label>"
         "<label class=\"control\"><span>Settle Threshold</span><b id=\"sv\">1.2</b><input id=\"se\" type=\"range\" min=\"0.2\" max=\"8\" step=\"0.1\"></label>"
         "<label class=\"control\"><span>Sensitivity</span><b id=\"snv\">1.0</b><input id=\"sn\" type=\"range\" min=\"0.3\" max=\"3\" step=\"0.1\"></label>"
-        "<label class=\"control\"><span>Minimum Sample Rate</span><b id=\"iv\">10</b><input id=\"ir\" type=\"range\" min=\"10\" max=\"100\" step=\"1\"></label>"
-        "<label class=\"control\"><span>Maximum Sample Rate</span><b id=\"bv\">80</b><input id=\"br\" type=\"range\" min=\"10\" max=\"250\" step=\"5\"></label>"
+        "<label class=\"control\"><span>Minimum Sample Rate</span><b id=\"iv\">10</b><input id=\"ir\" type=\"range\" min=\"10\" max=\"" STRINGIFY(MAX_IDLE_RATE_HZ) "\" step=\"1\"></label>"
+        "<label class=\"control\"><span>Maximum Sample Rate</span><b id=\"bv\">80</b><input id=\"br\" type=\"range\" min=\"10\" max=\"" STRINGIFY(MAX_BOOST_RATE_HZ) "\" step=\"5\"></label>"
         "<label class=\"control\"><span>Boost Hold Time</span><b id=\"bdv\">8s</b><input id=\"bd\" type=\"range\" min=\"0\" max=\"20\" step=\"1\"></label>"
         "<label class=\"control\"><span>Cooldown Time</span><b id=\"cdv\">15s</b><input id=\"cd\" type=\"range\" min=\"0\" max=\"20\" step=\"1\"></label>"
         "<label class=\"control\"><span>Feature Window</span><b id=\"fwv\">250ms</b><input id=\"fw\" type=\"range\" min=\"0\" max=\"1000\" step=\"50\"></label>"
         "<label class=\"control\"><span>Graph Score Max</span><b id=\"gmv\">10</b><input id=\"gm\" type=\"range\" min=\"1\" max=\"20\" step=\"1\" value=\"10\"></label>"
-        "<label class=\"control\"><span>Graph Rate Max</span><b id=\"grv\">160</b><input id=\"gr\" type=\"range\" min=\"10\" max=\"250\" step=\"10\" value=\"160\"></label>"
+        "<label class=\"control\"><span>Graph Rate Max</span><b id=\"grv\">160</b><input id=\"gr\" type=\"range\" min=\"10\" max=\"" STRINGIFY(MAX_BOOST_RATE_HZ) "\" step=\"10\" value=\"160\"></label>"
         "<label class=\"control\"><span>Graph Update Rate</span><b id=\"guv\">1.0 Hz</b><input id=\"gu\" type=\"range\" min=\"0.2\" max=\"20\" step=\"0.2\" value=\"1\"></label></div>"
         "<section><h2>CSI MAC Histogram</h2><div id=\"mach\" class=\"mach empty\">No CSI MACs observed yet.</div><div id=\"srcdiag\" class=\"srcdiag\"></div></section>"
         "<div class=\"actions\"><button id=\"cal\" type=\"button\">Auto-calibrate stillness</button><button id=\"delcal\" type=\"button\">Delete calibration data</button><span id=\"calmsg\"></span></div>"
@@ -2985,8 +3021,8 @@ void app_main(void)
 
     init_wifi();
     start_http_server();
-    xTaskCreate(csi_aggregation_task, "csi_aggregation", 4096, NULL, 5, NULL);
+    xTaskCreate(csi_aggregation_task, "csi_aggregation", ESP32_INTRUDER_CSI_AGGREGATION_STACK, NULL, 5, NULL);
     xTaskCreate(pi_telemetry_task, "pi_telemetry", PI_TELEMETRY_STACK, NULL, 4, NULL);
 
-    ESP_LOGI(TAG, "ESP32 CSI node ready");
+    ESP_LOGI(TAG, "ESP32 CSI node ready (%s, %s profile)", ESP32_INTRUDER_BOARD_VARIANT, ESP32_INTRUDER_HARDWARE_PROFILE);
 }

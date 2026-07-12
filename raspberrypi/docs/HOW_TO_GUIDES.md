@@ -1,6 +1,6 @@
 # Raspberry Pi How-To Guides
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 ## How To Configure First Install
 
@@ -96,6 +96,22 @@ for that MAC. `Accepted after gates` rising means those callbacks are surviving
 the receiver's filter, throttle, quality checks, and queue handoff. If the
 normal histogram evicts the sender but the protected panel still updates, the
 sender is present but quieter than louder router or household traffic.
+
+## How To Build ESP32-S3-WROOM-1U Receivers
+
+Use the S3 receiver folder for ESP32-S3-WROOM-1U boards:
+
+```powershell
+cd firmware\esp32-s3-wroom
+idf.py set-target esp32s3
+idf.py build
+idf.py -p COMx flash monitor
+```
+
+This build shares the receiver source with `firmware/esp32-csi-node` but reports
+`board_variant: "ESP32-S3-WROOM-1U"` and enables the `s3-enhanced` CSI capacity
+profile. Keep using `firmware/esp32-csi-node` for backward-compatible
+ESP32-WROOM-32 receiver boards.
 
 ## How To Point Cloudflare Tunnel
 

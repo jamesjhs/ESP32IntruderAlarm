@@ -1,6 +1,6 @@
 # PWA Technical Manual
 
-Version: `0.4.1`
+Version: `0.5.1`
 
 ## Responsibilities
 
@@ -35,11 +35,12 @@ and hide receiver-only calibration controls. Receiver settings include
 firmware to analyse CSI frames from the known sender instead of mixed household
 traffic.
 
-For receiver nodes running `0.4.1` or later, the status proxy also carries
-`csi_source_mac_diagnostics`. The PWA renders this beneath the CSI MAC
-histogram so operators can distinguish "sender MAC was seen by the CSI
-callback" from "sender MAC survived filtering, throttling, quality checks, and
-queue handoff."
+For receiver nodes running `0.5.1` or later, the status proxy carries
+`role`, `board_variant`, and `hardware_profile` in addition to
+`csi_source_mac_diagnostics`. The PWA renders the board/profile fields in the
+receiver status list and renders the diagnostics beneath the CSI MAC histogram
+so operators can distinguish "sender MAC was seen by the CSI callback" from
+"sender MAC survived filtering, throttling, quality checks, and queue handoff."
 
 ## API Design
 
