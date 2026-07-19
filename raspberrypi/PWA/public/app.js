@@ -197,6 +197,11 @@ let movementHistory = { range: { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0, a
 let movementTrigger = { threshold: 3, enabled: true };
 let historyWindow = { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0 };
 
+/** True while a node friendly-name input owns focus and must not be re-rendered. */
+function isEditingNodeName() {
+  return document.activeElement?.classList?.contains("node-name-input");
+}
+
 /**
  * Converts thrown fetch/API errors into messages that make sense to the user.
  * The "Not Found" branch is especially helpful after backend changes, when a
@@ -478,6 +483,8 @@ async function setHistogramSourceMac(mac, enabled) {
  */
 function renderNodes(nodes) {
   lastStatusNodes = nodes;
+  if (isEditingNodeName()) return;
+
   if (!nodes.length) {
     nodesEl.className = "nodes empty";
     nodesEl.textContent = "No node telemetry yet.";
@@ -630,7 +637,9 @@ async function refreshStatus() {
     workerStateEl.textContent = "offline";
     knownNodesEl.textContent = "0";
     healthyNodesEl.textContent = "0";
-    renderNodes([]);
+    if (!isEditingNodeName()) {
+      renderNodes([]);
+    }
   }
 }
 
@@ -1474,7 +1483,7 @@ async function saveMovementTrigger() {
 async function refreshAdmin() {
   currentAdmin = await readJson("/api/admin/summary");
   renderPush(currentAdmin);
-  if (lastStatusNodes.length) {
+  if (lastStatusNodes.length && !isEditingNodeName()) {
     renderNodes(lastStatusNodes);
   }
   renderSecurity(currentAdmin.security);
@@ -1591,6 +1600,7 @@ async function saveNodeFriendlyName(input) {
 nodesEl.addEventListener("focusout", async (event) => {
   if (!event.target.classList?.contains("node-name-input")) return;
   await saveNodeFriendlyName(event.target);
+  renderNodes(lastStatusNodes);
 });
 
 // Enter commits a name edit by blurring the input, which triggers the same save
@@ -1601,6 +1611,15 @@ nodesEl.addEventListener("keydown", async (event) => {
     event.preventDefault();
     event.target.blur();
   }
+});
+
+// A focused name input is an edit surface, not a node navigation/settings click.
+["click", "pointerdown", "mousedown", "touchstart"].forEach((eventName) => {
+  nodesEl.addEventListener(eventName, (event) => {
+    if (event.target.classList?.contains("node-name-input")) {
+      event.stopImmediatePropagation();
+    }
+  });
 });
 
 // Distinguish Identify from Settings by using separate data attributes on the
