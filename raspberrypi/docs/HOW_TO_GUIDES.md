@@ -35,6 +35,16 @@ Check:
 Invoke-RestMethod http://127.0.0.1:3005/healthz
 ```
 
+On Raspberry Pi, install `nmap` before relying on MAC/IP enrichment:
+
+```bash
+sudo apt install nmap
+nmap -sn 192.168.1.0/24
+```
+
+Set `NMAP_SCAN_TARGET` in `raspberrypi/.env` if your LAN is not derived
+correctly from ESP32 node IPs.
+
 ## How To Run The PWA Service
 
 ```powershell
@@ -96,6 +106,34 @@ for that MAC. `Accepted after gates` rising means those callbacks are surviving
 the receiver's filter, throttle, quality checks, and queue handoff. If the
 normal histogram evicts the sender but the protected panel still updates, the
 sender is present but quieter than louder router or household traffic.
+
+## How To Check MAC/IP Discovery
+
+The worker publishes both cheap neighbor data and nmap discovery results:
+
+```bash
+curl http://127.0.0.1:3005/internal/status | jq '.mac_discovery.records'
+```
+
+If a MAC in the receiver histogram does not show an IP in the PWA, run:
+
+```bash
+nmap -sn 192.168.1.0/24
+sudo systemctl restart esp32-alarm-worker.service
+```
+
+Then reopen the receiver Settings modal. The histogram row should prefer known
+ESP32 names, then nmap IP/hostname/vendor data, then any `ip neigh` fallback.
+
+## How To Capture CSI From The Pi Dashboard
+
+Open a receiver node's Settings modal in the PWA. In **CSI Capture**, leave the
+duration at the default 30 seconds or choose 5-300 seconds, select `features` or
+`raw_csi`, add an optional label, and start capture. The receiver streams chunks
+to the Pi, which stores files under `raspberrypi/data/captures`.
+
+Use **Refresh Captures** to show recent files, then download the `.ndjson` data
+or `.json` metadata.
 
 ## How To Build ESP32-S3-WROOM-1U Receivers
 

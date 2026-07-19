@@ -10,9 +10,9 @@ Current prototype version: `0.5.1`.
 
 `0.5.1` adds a separate ESP32-S3-WROOM-1U receiver build with an enhanced CSI
 capacity profile while keeping the original ESP32-WROOM-32 receiver and sender
-builds backward-compatible. The S3 build compiles the same receiver source as
-the standard build, so future receiver features and fixes should land in both
-targets together.
+builds backward-compatible. It also adds Pi-managed bounded CSI capture files,
+S3 RGB identify feedback, and Pi-side MAC/IP enrichment for CSI histograms using
+known telemetry plus intermittent `nmap` discovery.
 
 Recent implementation timeline:
 
@@ -33,6 +33,10 @@ Recent implementation timeline:
   ESP32-S3-WROOM-1U boards, shared receiver source between WROOM-32 and S3
   builds, S3-enhanced CSI queue/rate/task-stack limits, and board/profile
   reporting in receiver status/config APIs.
+- Current `0.5.1` additions: bounded receiver CSI capture from the Pi dashboard
+  with downloadable `.ndjson`/metadata files, ESP32-S3 rainbow identify on the
+  onboard RGB LED, receiver `sta_mac` status, and nmap-enriched MAC histogram
+  identity display in the Pi PWA.
 
 ## Why CSI?
 
@@ -569,7 +573,7 @@ Recommended data modes:
 | Feature polling | Normal alarm operation | Low | ESP32 sends movement score, RSSI, packet rate, variance, selected subcarrier statistics, and health fields. |
 | Idle/boost summaries | Efficient event capture | Low to moderate | ESP32 stays in low-rate idle mode, then emits denser summaries or burst data briefly when local variance crosses a threshold. |
 | Window summaries | Better detection/fusion | Low to moderate | ESP32 sends per-second or per-window feature vectors for the Pi to fuse across nodes. |
-| Raw CSI burst capture | Calibration and debugging | Moderate to high | Capture short labelled sessions, then stop. Useful for plotting and feature design. |
+| Raw CSI burst capture | Calibration and debugging | Moderate to high | Implemented as Pi-started bounded receiver captures. Default 30 seconds; outputs downloadable `.ndjson` data and `.json` metadata. |
 | Continuous raw CSI streaming | Research only | High | Avoid for normal operation, especially with three nodes over a busy home Wi-Fi network. |
 | Offline model training | Model development | Variable | Train on a laptop/desktop if models become large; deploy small trained models back to the Pi. |
 
@@ -590,6 +594,11 @@ Processing assessment:
 - A Raspberry Pi Zero or older Pi may still handle polling and simple thresholds, but model training and live plotting should be kept modest.
 - Raw CSI can grow quickly because each packet may contain many subcarrier values. Sending every packet from three nodes as JSON would waste bandwidth and CPU.
 - Binary or compact encoded burst uploads are preferable if raw CSI must be transferred.
+- The current capture path is intentionally bounded and Pi-owned: the ESP32
+  streams chunks, while the Pi stores and serves files for offline analysis.
+- CSI histogram MAC rows are enriched on the Pi with known ESP32 node metadata,
+  configured source-MAC relationships, intermittent `nmap -sn` scan output, and
+  `ip neigh` as a fallback.
 - The most robust architecture is edge feature extraction on the ESP32, online decision-making on the Pi, and heavier model exploration on a development machine.
 - MQTT or UDP may become useful for high-rate boosted windows, but the first implementation should prove the lower-risk JSON polling path before adding a broker.
 

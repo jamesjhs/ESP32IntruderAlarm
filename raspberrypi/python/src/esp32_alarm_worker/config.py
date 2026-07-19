@@ -49,6 +49,9 @@ class WorkerConfig:
     telemetry_path: str
     capture_path: str
     capture_dir: Path
+    nmap_enabled: bool
+    nmap_scan_target: str
+    nmap_min_interval_seconds: float
     udp_probe_enabled: bool
     udp_probe_target_ip: str
     udp_probe_target_port: int
@@ -67,6 +70,7 @@ def load_config() -> WorkerConfig:
         capture_path = f"/{capture_path}"
     here = Path(__file__).resolve()
     raspberrypi_dir = here.parents[3]
+    capture_dir = Path(os.getenv("ESP32_CAPTURE_DIR") or raspberrypi_dir / "data" / "captures")
 
     return WorkerConfig(
         version=read_shared_version(),
@@ -74,7 +78,10 @@ def load_config() -> WorkerConfig:
         port=int(os.getenv("WORKER_PORT", "3005")),
         telemetry_path=telemetry_path,
         capture_path=capture_path,
-        capture_dir=Path(os.getenv("ESP32_CAPTURE_DIR", raspberrypi_dir / "data" / "captures")),
+        capture_dir=capture_dir,
+        nmap_enabled=_bool_env("NMAP_DISCOVERY_ENABLED", True),
+        nmap_scan_target=os.getenv("NMAP_SCAN_TARGET", ""),
+        nmap_min_interval_seconds=float(os.getenv("NMAP_MIN_INTERVAL_SECONDS", "600")),
         udp_probe_enabled=_bool_env("UDP_PROBE_ENABLED", False),
         udp_probe_target_ip=os.getenv("UDP_PROBE_TARGET_IP", ""),
         udp_probe_target_port=int(os.getenv("UDP_PROBE_TARGET_PORT", "9")),

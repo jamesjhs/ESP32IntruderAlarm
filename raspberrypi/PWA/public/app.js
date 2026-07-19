@@ -1729,7 +1729,7 @@ nodesEl.addEventListener("click", async (event) => {
   if (identifyDeviceId) {
     await runAction(async () => {
       await postJson(`/api/nodes/${identifyDeviceId}/identify`);
-    }, "Node identify blink started.");
+    }, "Node identify pattern started.");
     return;
   }
 

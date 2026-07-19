@@ -23,6 +23,12 @@ ESP32 receiver and sender nodes on LAN
 Cloudflare should expose only the PWA service. The ESP32 telemetry receiver is
 LAN-only and should not be routed through Cloudflare.
 
+The Pi install now treats `nmap` as a prerequisite. The Python worker uses it
+intermittently, especially after receiver histograms report new MAC addresses,
+to enrich the PWA CSI MAC histogram with best-effort IP address, DNS name, and
+vendor details. Known ESP32 telemetry and stored node names remain the preferred
+identity source; nmap is the LAN fallback for household/router devices.
+
 Since `0.4.0`, the Pi also manages a dedicated ESP32 CSI sender. The sender
 joins the same 2.4 GHz network as the receiver nodes, posts telemetry to the
 same Python worker endpoint with `role: "csi_sender"`, and can be started,
@@ -33,6 +39,10 @@ the original ESP32-WROOM-32 receiver and sender targets compatible. S3 receiver
 telemetry reports `role: "csi_receiver"`, `board_variant:
 "ESP32-S3-WROOM-1U"`, and `hardware_profile: "s3-enhanced"`; the PWA preserves
 and displays those fields through the normal worker/PWA status flow.
+
+The Pi dashboard can also start bounded receiver CSI captures, defaulting to 30
+seconds, and download the resulting `.ndjson` sample file plus `.json` metadata
+from `data/captures`.
 
 ## Quick Start
 
@@ -47,6 +57,10 @@ cd raspberrypi
 chmod +x ./install-and-run.sh
 ./install-and-run.sh
 ```
+
+The installer checks for `nmap`, installs it with `apt` when missing, and gives
+the worker service network capabilities needed for local MAC/IP discovery where
+the Pi OS allows it.
 
 To update an existing install from the old `3000`/`1000` ports to `3015`/`3005`
 without reinstalling everything, run:

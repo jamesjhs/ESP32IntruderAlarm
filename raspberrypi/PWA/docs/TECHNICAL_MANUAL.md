@@ -12,7 +12,8 @@ The TypeScript service owns the public application surface:
 - Cloudflare Access-aware response handling
 - persistent admin data, node registry, VAPID push, movement events, and audit logs
 - ESP32 node proxy routes for receiver status, configuration, persisted
-  calibration, and sender status/configuration/start-stop control
+  calibration, bounded capture, and sender status/configuration/start-stop
+  control
 
 ## Runtime
 
@@ -41,6 +42,19 @@ For receiver nodes running `0.5.1` or later, the status proxy carries
 receiver status list and renders the diagnostics beneath the CSI MAC histogram
 so operators can distinguish "sender MAC was seen by the CSI callback" from
 "sender MAC survived filtering, throttling, quality checks, and queue handoff."
+
+The CSI MAC histogram also consumes a Pi-side MAC identity map from
+`/api/admin/summary`. The map prefers known ESP32 telemetry and database names,
+then uses the Python worker's intermittent `nmap` discovery cache to show IP,
+hostname, and vendor detail for other LAN devices. The worker's `ip neigh` data
+is retained as a cheap fallback, but nmap is the preferred active discovery
+source.
+
+Receiver modals include bounded CSI capture controls. The PWA asks the receiver
+to start a capture through `/api/nodes/:deviceId/capture/start`, defaulting to
+30 seconds, while the receiver streams capture chunks to the Python worker. The
+PWA lists completed or in-progress files through `/api/captures` and downloads
+`.ndjson` data or `.json` metadata from the Pi.
 
 ## API Design
 

@@ -38,3 +38,29 @@ fields such as `movement_score`, `sample_rate_hz`, and `rssi`.
 ESP32-S3-WROOM-1U receivers built from `firmware/esp32-s3-wroom` also report
 `board_variant: "ESP32-S3-WROOM-1U"` and `hardware_profile: "s3-enhanced"` in
 their preserved payload.
+
+## How To Check nmap MAC Discovery
+
+Install nmap on the Pi:
+
+```bash
+sudo apt install nmap
+```
+
+Set an explicit scan target in `raspberrypi/.env` if needed:
+
+```text
+NMAP_DISCOVERY_ENABLED=true
+NMAP_SCAN_TARGET=192.168.1.0/24
+NMAP_MIN_INTERVAL_SECONDS=600
+```
+
+Restart the worker and inspect cached discovery:
+
+```bash
+sudo systemctl restart esp32-alarm-worker.service
+curl http://127.0.0.1:3005/internal/status | jq '.mac_discovery'
+```
+
+The worker schedules scans when receiver telemetry reports new MAC addresses in
+CSI histogram fields, and also refreshes occasionally in the background.

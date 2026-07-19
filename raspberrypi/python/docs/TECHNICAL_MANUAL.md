@@ -11,6 +11,8 @@ The worker owns the local sensing data plane:
 - keep latest per-node state in memory
 - expose internal status to the PWA service
 - generate optional UDP probe packets
+- enrich CSI histogram MAC addresses with intermittent `nmap -sn` discovery
+- ingest bounded CSI capture chunks at `/capture`
 
 Future versions should add:
 
@@ -44,6 +46,18 @@ sender ESP32 devices. Important receiver fields include:
 Unknown fields are preserved in the node snapshot so firmware can add values
 without breaking the worker.
 
+Receiver histogram MACs are also inspected for discovery. When new MACs appear,
+the worker schedules a bounded `nmap -sn` scan no more frequently than the
+configured minimum interval. Results are cached in memory and returned in
+`mac_discovery.records` from `/internal/status`. Each record is keyed by MAC and
+may include IP, hostname, vendor, scan time, and source. `ip neigh` remains a
+cheap secondary map in `mac_neighbors`, but nmap is the preferred enrichment
+path when available.
+
+Bounded capture chunks posted by receiver firmware to `/capture` are appended
+to `.ndjson` data files with a `.json` metadata sidecar under
+`ESP32_CAPTURE_DIR`, defaulting to `raspberrypi/data/captures`.
+
 `board_variant`, `hardware_profile`, and `csi_source_mac_diagnostics` are
 produced by receiver firmware `0.5.1` and later. The worker does not interpret
 them, but preserving them lets the PWA show whether the node is the
@@ -70,3 +84,16 @@ For the preferred controlled-source topology, use the dedicated ESP32 sender
 instead of relying on the Pi UDP probe loop. The sender gives receiver ESP32
 boards a known 2.4 GHz source MAC to filter against, while the Pi remains the
 management and telemetry hub.
+
+## nmap Configuration
+
+Relevant environment variables:
+
+- `NMAP_DISCOVERY_ENABLED`: defaults to `true`.
+- `NMAP_SCAN_TARGET`: optional CIDR or host range, for example
+  `192.168.1.0/24`.
+- `NMAP_MIN_INTERVAL_SECONDS`: defaults to `600`.
+
+The installer installs `nmap`, grants raw-network capabilities where possible,
+and gives the worker service `CAP_NET_RAW`/`CAP_NET_ADMIN` through systemd so
+local ARP-style discovery can report MAC addresses.

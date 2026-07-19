@@ -77,6 +77,25 @@ require_command python3
 require_command node
 require_command npm
 
+if ! command -v nmap >/dev/null 2>&1; then
+  log "Installing nmap for Pi-side MAC/IP discovery"
+  "${SUDO[@]}" apt-get update
+  "${SUDO[@]}" apt-get install -y nmap
+fi
+require_command nmap
+
+if command -v setcap >/dev/null 2>&1; then
+  NMAP_BIN="$(command -v nmap)"
+  if ! getcap "${NMAP_BIN}" 2>/dev/null | grep -q 'cap_net_raw'; then
+    log "Granting nmap raw-network capability for non-root neighbor discovery"
+    if ! "${SUDO[@]}" setcap cap_net_raw,cap_net_admin+eip "${NMAP_BIN}"; then
+      warn "Could not set capabilities on ${NMAP_BIN}. nmap discovery may need the worker service to run with elevated network capabilities."
+    fi
+  fi
+else
+  warn "setcap is unavailable. nmap discovery may not report MAC addresses when run by the worker service user."
+fi
+
 python3 - <<'PY'
 import sys
 if sys.version_info < (3, 9):
@@ -118,6 +137,9 @@ Group=${RUN_GROUP}
 WorkingDirectory=${SCRIPT_DIR}
 EnvironmentFile=${ENV_FILE}
 ExecStart=${PYTHON_VENV}/bin/python -m esp32_alarm_worker.server
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=true
 Restart=on-failure
 RestartSec=5
 

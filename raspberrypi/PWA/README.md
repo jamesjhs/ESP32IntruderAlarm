@@ -25,6 +25,15 @@ the Pi, and can be configured through the same Settings flow as receiver nodes.
 Receiver settings include a sender MAC filter so CSI scoring can focus on the
 known packet source.
 
+Receiver MAC histograms are enriched from the Pi where possible. The PWA first
+uses known ESP32 telemetry and persisted node names, then consumes the Python
+worker's `nmap` discovery cache to show LAN IP, hostname, and vendor detail for
+other MACs observed by CSI.
+
+Receiver settings also include a bounded CSI Capture panel. Captures default to
+30 seconds, support `features` and `raw_csi` modes, and produce downloadable
+`.ndjson` data with `.json` metadata from the Pi.
+
 ## Install
 
 Supported runtime:
@@ -88,14 +97,20 @@ npm start
 | `POST` | `/api/admin/nodes/:id/name` | Rename a known node. |
 | `POST` | `/api/admin/security` | Save security-setting flags. |
 | `POST` | `/api/admin/backup` | Checkpoint and copy the SQLite database to the backup directory. |
+| `GET` | `/api/captures` | List Pi-side bounded CSI capture files. |
+| `GET` | `/api/captures/:captureId/download` | Download capture `.ndjson` data. |
+| `GET` | `/api/captures/:captureId/metadata` | Download capture metadata JSON. |
 | `GET` | `/api/nodes/:deviceId/status` | Proxy live status from a selected ESP32 node. |
 | `GET` | `/api/nodes/:deviceId/config` | Proxy node configuration from a selected ESP32 node. |
 | `POST` | `/api/nodes/:deviceId/config` | Save node configuration through the ESP32 `/api/config` endpoint. |
 | `POST` | `/api/nodes/:deviceId/calibrate` | Start a 10 second quiet stillness calibration on the ESP32. |
-| `POST` | `/api/nodes/:deviceId/identify` | Blink the selected ESP32 node's blue LED for 10 seconds. |
+| `POST` | `/api/nodes/:deviceId/identify` | Run the selected ESP32 node's board-specific identify pattern. |
 | `GET` | `/api/nodes/:deviceId/calibration` | Read the ESP32 persisted calibration baseline. |
 | `POST` | `/api/nodes/:deviceId/calibration` | Save ESP32 calibration baseline values to NVS. |
 | `DELETE` | `/api/nodes/:deviceId/calibration` | Clear the ESP32 persisted calibration baseline. |
+| `GET` | `/api/nodes/:deviceId/capture/status` | Proxy receiver capture state. |
+| `POST` | `/api/nodes/:deviceId/capture/start` | Start a bounded receiver CSI capture. |
+| `POST` | `/api/nodes/:deviceId/capture/stop` | Stop the current receiver CSI capture early. |
 
 Sender nodes use the same status/config proxy routes. The PWA detects them from
 telemetry payloads with `role: "csi_sender"`, shows a Start/Stop Sender button,
@@ -108,6 +123,7 @@ The web service creates a persistent database at
 
 - `ALARM_DATABASE_PATH`
 - `ALARM_BACKUP_DIR`
+- `ESP32_CAPTURE_DIR`
 - `SQLCIPHER_KEY`
 - `VAPID_SUBJECT`
 

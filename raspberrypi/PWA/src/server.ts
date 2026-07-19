@@ -420,6 +420,21 @@ async function buildMacIdentities() {
     });
   }
 
+  for (const record of Object.values((workerStatus?.mac_discovery?.records ?? {}) as Record<string, any>)) {
+    const name = String(record?.name ?? "");
+    const vendor = String(record?.vendor ?? "");
+    const ip = String(record?.ip ?? "");
+    mergeMacIdentity(identities, record?.mac, {
+      friendlyName: name || vendor || (ip ? `LAN device ${ip}` : "LAN device"),
+      ip,
+      role: "LAN scan",
+      deviceId: null,
+      source: "nmap",
+      confidence: "observed",
+      notes: [vendor ? `Vendor: ${vendor}` : "", record?.seen_at ? `Seen: ${record.seen_at}` : ""].filter(Boolean)
+    });
+  }
+
   for (const neighbor of await readArpNeighbors()) {
     const hostname = await reverseDnsName(neighbor.ip);
     mergeMacIdentity(identities, neighbor.mac, {

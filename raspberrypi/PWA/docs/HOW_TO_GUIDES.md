@@ -44,10 +44,27 @@ filter` confirms the configured sender MAC is reaching the CSI callback.
 `Accepted after gates` confirms those packets are also passing the receiver's
 source filter, throttling, quality checks, and queue handoff.
 
+The histogram rows also show Pi-side identity enrichment when available:
+friendly ESP32 node names first, then nmap-derived IP/hostname/vendor details,
+then any `ip neigh` fallback.
+
 For ESP32-S3-WROOM-1U receivers, flash `firmware/esp32-s3-wroom` instead of
 `firmware/esp32-csi-node`. In the receiver status modal, confirm the board
 fields show `ESP32-S3-WROOM-1U` and `s3-enhanced` before tuning higher S3-only
 sample-rate ceilings.
+
+## How To Download A CSI Capture
+
+Open a receiver Settings modal and use **CSI Capture**:
+
+1. Choose a duration, default `30` seconds.
+2. Choose `features` for compact per-packet features or `raw_csi` for those
+   fields plus a bounded raw CSI byte prefix.
+3. Add an optional label.
+4. Start the capture and wait for it to complete, or stop it early.
+5. Use **Refresh Captures**, then download data or metadata.
+
+The browser downloads from the Pi, not directly from the ESP32.
 
 ## How To Build For Production
 

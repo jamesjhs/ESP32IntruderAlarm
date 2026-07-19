@@ -23,6 +23,8 @@ The Python worker owns LAN sensor concerns:
 - receiver and sender role relay for the PWA
 - sparse health and diagnostics APIs
 - UDP probe traffic timer
+- intermittent nmap MAC/IP discovery for receiver CSI histograms
+- bounded CSI capture ingest and file storage
 - compact telemetry relay for the PWA status and history pipeline
 
 The services communicate over loopback. The PWA service reads worker status from
@@ -41,6 +43,18 @@ and `hardware_profile`; the S3 build reports `ESP32-S3-WROOM-1U` and
 `s3-enhanced`. The existing `csi_source_mac_diagnostics` block remains the
 protected counter block for the configured sender MAC with `seen_before_filter`,
 `accepted_after_gates`, `last_seen_ms`, and `last_accepted_ms`.
+
+The worker inspects receiver histogram MACs and runs `nmap -sn` intermittently
+when new MACs appear. Its cached scan output is merged by the PWA with known
+ESP32 telemetry and database records so histogram rows can show friendly names,
+IP addresses, hostnames, and vendors where discoverable. `NMAP_SCAN_TARGET`
+can force the scan range; otherwise the worker derives a `/24` from observed
+ESP32 node IPs.
+
+Bounded receiver captures are Pi-owned. The PWA starts and stops capture
+sessions through receiver proxy routes, while receiver firmware streams chunks
+to the Python worker's `/capture` endpoint. The worker writes `.ndjson` data
+and `.json` metadata under `data/captures` by default.
 
 ## Ports
 

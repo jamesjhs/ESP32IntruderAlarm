@@ -26,6 +26,7 @@ import shutil
 import socket
 from contextlib import suppress
 from datetime import datetime, timezone
+from ipaddress import IPv4Address, IPv4Network, ip_address
 from typing import Any, Optional
 
 from aiohttp import web
@@ -37,6 +38,8 @@ from .views import render_index_html
 
 CAPTURE_ID_RE = re.compile(r"^[A-Za-z0-9_. -]{1,40}$")
 MAC_RE = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
+NMAP_REPORT_RE = re.compile(r"^Nmap scan report for (?:(?P<name>.+) \((?P<named_ip>[0-9.]+)\)|(?P<plain_ip>[0-9.]+))$")
+NMAP_MAC_RE = re.compile(r"^MAC Address: (?P<mac>[0-9A-Fa-f:]{17})(?: \((?P<vendor>.*)\))?$")
 
 
 def safe_capture_id(value: object) -> str:
@@ -100,6 +103,138 @@ async def ip_neigh_mac_map() -> dict[str, dict[str, str]]:
     return neighbors
 
 
+def histogram_macs(payload: dict[str, Any]) -> set[str]:
+    """Extract normalized MAC addresses reported in receiver CSI diagnostics."""
+    macs: set[str] = set()
+    for key in ("last_csi_mac", "last_filtered_csi_mac", "last_accepted_csi_mac", "csi_source_mac"):
+        mac = normalize_mac(payload.get(key))
+        if mac:
+            macs.add(mac)
+    for entry in payload.get("csi_mac_histogram") or []:
+        if isinstance(entry, dict):
+            mac = normalize_mac(entry.get("mac"))
+            if mac:
+                macs.add(mac)
+    return macs
+
+
+def derive_scan_target(config: WorkerConfig, store: NodeStore) -> str:
+    """Choose an nmap target from config or observed node IPs."""
+    if config.nmap_scan_target:
+        return config.nmap_scan_target
+    networks: dict[str, int] = {}
+    for node in store.all():
+        try:
+            parsed = ip_address(node.ip)
+        except ValueError:
+            continue
+        if isinstance(parsed, IPv4Address) and not (parsed.is_loopback or parsed.is_unspecified or parsed.is_multicast):
+            network = str(IPv4Network(f"{parsed}/24", strict=False))
+            networks[network] = networks.get(network, 0) + 1
+    if networks:
+        return max(networks.items(), key=lambda item: item[1])[0]
+    return ""
+
+
+def parse_nmap_output(text: str) -> dict[str, dict[str, str]]:
+    """Parse `nmap -sn` output into a MAC-keyed identity cache."""
+    records: dict[str, dict[str, str]] = {}
+    current_ip = ""
+    current_name = ""
+    for line in text.splitlines():
+        line = line.strip()
+        report = NMAP_REPORT_RE.match(line)
+        if report:
+            current_ip = report.group("named_ip") or report.group("plain_ip") or ""
+            current_name = report.group("name") or ""
+            continue
+        mac_line = NMAP_MAC_RE.match(line)
+        if mac_line and current_ip:
+            mac = normalize_mac(mac_line.group("mac"))
+            if not mac:
+                continue
+            records[mac] = {
+                "mac": mac,
+                "ip": current_ip,
+                "name": current_name,
+                "vendor": mac_line.group("vendor") or "",
+                "source": "nmap",
+                "seen_at": datetime.now(timezone.utc).isoformat(),
+            }
+    return records
+
+
+async def run_nmap_scan(target: str) -> dict[str, dict[str, str]]:
+    """Run a bounded ping/ARP nmap scan and return discovered MAC records."""
+    nmap_command = shutil.which("nmap")
+    if not nmap_command or not target:
+        return {}
+    try:
+        process = await asyncio.create_subprocess_exec(
+            nmap_command,
+            "-sn",
+            target,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=45)
+    except Exception:
+        return {}
+    return parse_nmap_output(stdout.decode("utf-8", errors="replace"))
+
+
+class MacDiscovery:
+    """Intermittently enrich histogram MACs with IP/name/vendor from nmap."""
+
+    def __init__(self) -> None:
+        self._reported_macs: set[str] = set()
+        self._records: dict[str, dict[str, str]] = {}
+        self._last_scan_epoch = 0.0
+        self._scan_task: asyncio.Task[None] | None = None
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "records": self._records,
+            "reported_macs": sorted(self._reported_macs),
+            "last_scan_epoch": self._last_scan_epoch,
+            "scan_running": self._scan_task is not None and not self._scan_task.done(),
+        }
+
+    def observe_payload(self, payload: dict[str, Any], config: WorkerConfig, store: NodeStore) -> None:
+        new_macs = histogram_macs(payload) - self._reported_macs
+        if new_macs:
+            self._reported_macs.update(new_macs)
+            self.maybe_schedule(config, store, reason="new_mac")
+
+    def maybe_schedule(self, config: WorkerConfig, store: NodeStore, reason: str = "interval") -> None:
+        if not config.nmap_enabled:
+            return
+        now = asyncio.get_running_loop().time()
+        if self._scan_task is not None and not self._scan_task.done():
+            return
+        if reason != "new_mac" and now - self._last_scan_epoch < config.nmap_min_interval_seconds:
+            return
+        if reason == "new_mac" and now - self._last_scan_epoch < min(config.nmap_min_interval_seconds, 60.0):
+            return
+        target = derive_scan_target(config, store)
+        if not target:
+            return
+        self._scan_task = asyncio.create_task(self._scan(target))
+
+    async def _scan(self, target: str) -> None:
+        self._last_scan_epoch = asyncio.get_running_loop().time()
+        records = await run_nmap_scan(target)
+        if records:
+            self._records.update(records)
+
+
+async def nmap_discovery_loop(config: WorkerConfig, store: NodeStore, discovery: MacDiscovery) -> None:
+    """Refresh nmap discovery occasionally even when no new MAC arrives."""
+    while True:
+        discovery.maybe_schedule(config, store)
+        await asyncio.sleep(max(60.0, min(config.nmap_min_interval_seconds, 300.0)))
+
+
 async def udp_probe_loop(config: WorkerConfig) -> None:
     """Send periodic UDP probe payloads when probe traffic is enabled.
 
@@ -126,9 +261,11 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
     """
     config = config or load_config()
     store = NodeStore()
+    discovery = MacDiscovery()
     app = web.Application()
     app["config"] = config
     app["store"] = store
+    app["mac_discovery"] = discovery
 
     async def healthz(_: web.Request) -> web.Response:
         """Return a process health response for service supervisors."""
@@ -144,6 +281,7 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
         """Render a small human-readable status page for local diagnostics."""
         status_data = store.status(config.version)
         status_data["mac_neighbors"] = await ip_neigh_mac_map()
+        status_data["mac_discovery"] = discovery.status()
         return web.Response(text=render_index_html(status_data), content_type="text/html")
 
     async def receive_telemetry(request: web.Request) -> web.Response:
@@ -152,6 +290,7 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
             payload: dict[str, Any] = await request.json()
             remote_ip = request.remote or ""
             snapshot = store.upsert(payload, remote_ip)
+            discovery.observe_payload(payload, config, store)
         except ValueError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
         except Exception:
@@ -230,6 +369,7 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
         """Return the full live worker status consumed by the PWA service."""
         status_data = store.status(config.version)
         status_data["mac_neighbors"] = await ip_neigh_mac_map()
+        status_data["mac_discovery"] = discovery.status()
         return web.json_response(status_data)
 
     async def node(request: web.Request) -> web.Response:
@@ -242,13 +382,15 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
 
     async def start_background(app_: web.Application) -> None:
         """Start optional background tasks after aiohttp is ready."""
-        task = asyncio.create_task(udp_probe_loop(config))
-        app_["udp_probe_task"] = task
+        app_["udp_probe_task"] = asyncio.create_task(udp_probe_loop(config))
+        app_["nmap_discovery_task"] = asyncio.create_task(nmap_discovery_loop(config, store, discovery))
 
     async def stop_background(app_: web.Application) -> None:
         """Cancel background tasks during graceful shutdown."""
-        task = app_.get("udp_probe_task")
-        if task:
+        for task_name in ("udp_probe_task", "nmap_discovery_task"):
+            task = app_.get(task_name)
+            if not task:
+                continue
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task

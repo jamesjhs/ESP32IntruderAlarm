@@ -7,6 +7,11 @@ nodes on LAN port `3005` at `/espdata`. It keeps live node state in memory,
 exposes internal status endpoints for the TypeScript PWA service, and can send
 optional UDP probe traffic on a timer.
 
+It also runs intermittent `nmap -sn` discovery for MAC addresses reported by
+receiver CSI histograms. Discovery results are exposed through
+`/internal/status` so the PWA can show IP/name/vendor detail below MACs where
+the LAN scan can resolve them.
+
 In the controlled-source topology, the dedicated sender posts the same telemetry
 shape with `role: "csi_sender"`. The worker stores it like any other node so the
 PWA can proxy configuration requests to the sender, while movement history still
@@ -27,6 +32,7 @@ Supported runtime:
 - Current dependency minimums: `aiohttp>=3.13.5,<3.14` and
   `python-dotenv>=1.2.1,<2`
 - Build backend: `setuptools>=68,<83`
+- System prerequisite on Raspberry Pi: `nmap`
 
 ```powershell
 cd raspberrypi\python
@@ -56,8 +62,26 @@ defaults.
 | `GET` | `/` | Human-readable landing page showing worker status and known nodes. |
 | `GET` | `/healthz` | Process health check. |
 | `POST` | `/espdata` | ESP32 telemetry ingest. Responds with `ok: true` and `ack: "espdata_received"` when stored. |
+| `POST` | `/capture` | ESP32 bounded CSI capture chunk ingest. Writes `.ndjson` data and `.json` metadata. |
 | `GET` | `/internal/status` | Live node state for the PWA service. |
 | `GET` | `/internal/nodes/{device_id}` | One node snapshot. |
+
+`/internal/status` includes:
+
+- `mac_neighbors`: cheap `ip neigh` results when available.
+- `mac_discovery`: intermittent `nmap` results keyed by MAC address, including
+  IP, optional host name, optional vendor, scan source, and scan timing state.
+
+## nmap Discovery
+
+The worker scans at most once per `NMAP_MIN_INTERVAL_SECONDS`, default `600`.
+When a receiver telemetry payload contains a MAC not previously seen in
+`csi_mac_histogram`, `last_csi_mac`, `last_filtered_csi_mac`, or
+`last_accepted_csi_mac`, the worker may schedule an earlier scan, with a
+minimum 60 second gap between new-MAC-triggered scans.
+
+Set `NMAP_SCAN_TARGET` to a CIDR such as `192.168.1.0/24` for predictable
+scanning. If it is blank, the worker derives a `/24` from known ESP32 node IPs.
 
 ## Troubleshooting
 

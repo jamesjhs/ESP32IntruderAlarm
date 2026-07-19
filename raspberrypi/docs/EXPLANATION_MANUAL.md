@@ -23,6 +23,7 @@ Version `0.5.1` is still a prototype, but the foundation now includes the
 service split, version-aware PWA shell, persistent admin database, movement
 history, push subscription plumbing, remote receiver configuration/calibration,
 Pi-managed control of a dedicated CSI sender, protected source-MAC diagnostics,
-and a separate ESP32-S3-WROOM-1U receiver build for the higher-capability
-receiver boards. Full app login enforcement and polished alarm arming workflows
-remain future hardening work.
+Pi-managed bounded CSI captures, nmap-enriched MAC/IP discovery for histogram
+rows, and a separate ESP32-S3-WROOM-1U receiver build for the
+higher-capability receiver boards. Full app login enforcement and polished
+alarm arming workflows remain future hardening work.

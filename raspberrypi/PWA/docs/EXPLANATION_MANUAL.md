@@ -17,6 +17,10 @@ Receiver status also shows a protected source-MAC diagnostic panel below the
 normal CSI MAC histogram so the sender can still be tracked even when louder
 router or household devices dominate the histogram.
 
+The Pi enriches histogram MAC rows where it can. Known ESP32 nodes use stored
+friendly names and telemetry; other devices can gain IP, hostname, and vendor
+details from the Python worker's intermittent nmap scans.
+
 The PWA also shows the receiver board variant and hardware profile reported by
 the firmware. That matters in `0.5.1` because ESP32-S3-WROOM-1U receivers use a
 separate `s3-enhanced` firmware target with higher CSI queue and sample-rate
