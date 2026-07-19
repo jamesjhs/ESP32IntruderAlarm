@@ -83,6 +83,27 @@
             <div id="node-source-mac-diagnostics" class="source-mac-diagnostics"></div>
           </article>
 
+          <article id="node-capture-panel" class="panel node-capture-panel">
+            <h3>CSI Capture</h3>
+            <form id="node-capture-form" class="node-config-form">
+              <label>Duration seconds <input name="duration_seconds" type="number" min="5" max="300" step="1" value="30"></label>
+              <label>Mode
+                <select name="mode">
+                  <option value="features">Features</option>
+                  <option value="raw_csi">Raw CSI</option>
+                </select>
+              </label>
+              <label>Label <input name="label" autocomplete="off" placeholder="quiet room"></label>
+              <button type="submit">Start Capture</button>
+            </form>
+            <div class="actions">
+              <button id="stop-node-capture" type="button">Stop Capture</button>
+              <button id="refresh-captures" type="button">Refresh Captures</button>
+            </div>
+            <p id="node-capture-message" class="message"></p>
+            <div id="captures-list" class="records"></div>
+          </article>
+
           <article id="node-calibration-panel" class="panel">
             <h3>Persisted Calibration</h3>
             <form id="node-calibration-form" class="node-config-form">

@@ -53,6 +53,10 @@ const nodeMacHistogramEl = document.querySelector("#node-mac-histogram");
 const nodeSourceMacDiagnosticsEl = document.querySelector("#node-source-mac-diagnostics");
 const nodeCalibrationFormEl = document.querySelector("#node-calibration-form");
 const nodeCalibrationPanelEl = document.querySelector("#node-calibration-panel");
+const nodeCapturePanelEl = document.querySelector("#node-capture-panel");
+const nodeCaptureFormEl = document.querySelector("#node-capture-form");
+const nodeCaptureMessageEl = document.querySelector("#node-capture-message");
+const capturesListEl = document.querySelector("#captures-list");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
 const historyFromEl = document.querySelector("#history-from-hours");
 const historyToEl = document.querySelector("#history-to-hours");
@@ -138,7 +142,10 @@ const NODE_STATUS_HELP = {
   last_filtered_csi_mac: "Most recent CSI MAC rejected because it did not match the configured source filter.",
   last_accepted_csi_mac: "Most recent CSI MAC that passed filtering, throttling, quality checks, and queue handoff into feature processing.",
   source_filtered_samples: "CSI frames ignored because they did not come from the configured sender MAC.",
-  calibrating: "Whether the node is currently recording a quiet baseline."
+  calibrating: "Whether the node is currently recording a quiet baseline.",
+  capture_active: "Whether this receiver is currently streaming a bounded CSI capture to the Pi.",
+  capture_records: "Capture records queued by the receiver during the current or most recent capture.",
+  capture_drops: "Capture records dropped because the capture queue was full."
 };
 
 const NODE_CONFIG_HELP = {
@@ -183,6 +190,9 @@ const NODE_ACTION_HELP = {
   calibrateNode: "Ask the ESP32 to record a fresh quiet baseline. Keep the area still while it runs.",
   identifyNode: "Blink this ESP32 node's blue LED rapidly for 10 seconds.",
   deleteNodeCalibration: "Clear the node's saved baseline so it can learn a new one.",
+  startNodeCapture: "Start a bounded CSI capture session and stream records to the Pi.",
+  stopNodeCapture: "Stop the current CSI capture session early.",
+  refreshCaptures: "Refresh the Pi-side list of downloadable CSI capture files.",
   saveNodeConfig: "Send these configuration values to the ESP32 node's /api/config endpoint.",
   saveNodeCalibration: "Persist these calibration baseline values to the ESP32 node's NVS.",
   reloadNodeCalibration: "Reload the calibration baseline currently saved on the ESP32 node."
@@ -388,6 +398,7 @@ function setNodeSettingsRole(role) {
   nodeStatusTitleEl.textContent = isSender ? "Sender Status" : "Receiver Status";
   nodeCalibrationPanelEl.classList.toggle("hidden", isSender);
   nodeMacHistogramPanelEl.classList.toggle("hidden", isSender);
+  nodeCapturePanelEl.classList.toggle("hidden", isSender);
   for (const label of nodeConfigFormEl.querySelectorAll("[data-config-role]")) {
     const targetRole = label.dataset.configRole;
     label.classList.toggle("hidden", targetRole !== "all" && targetRole !== (isSender ? "sender" : "receiver"));
@@ -705,6 +716,9 @@ function attachNodeSettingsHelp() {
     ["#refresh-node-status", NODE_ACTION_HELP.refreshNodeStatus],
     ["#calibrate-node", NODE_ACTION_HELP.calibrateNode],
     ["#delete-node-calibration", NODE_ACTION_HELP.deleteNodeCalibration],
+    ['#node-capture-form button[type="submit"]', NODE_ACTION_HELP.startNodeCapture],
+    ["#stop-node-capture", NODE_ACTION_HELP.stopNodeCapture],
+    ["#refresh-captures", NODE_ACTION_HELP.refreshCaptures],
     ['#node-config-form button[type="submit"]', NODE_ACTION_HELP.saveNodeConfig],
     ['#node-calibration-form button[type="submit"]', NODE_ACTION_HELP.saveNodeCalibration],
     ["#reload-node-calibration", NODE_ACTION_HELP.reloadNodeCalibration]
@@ -734,6 +748,55 @@ function renderRecords(target, records, emptyText) {
       return item;
     })
   );
+}
+
+function formatBytes(value) {
+  const bytes = asNumber(value);
+  if (bytes === null) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderCaptures(captures) {
+  const selected = captures.filter((capture) => Number(capture.device_id) === Number(selectedNodeDeviceId));
+  if (!selected.length) {
+    capturesListEl.textContent = "No captures for this receiver yet.";
+    return;
+  }
+
+  capturesListEl.replaceChildren(
+    ...selected.map((capture) => {
+      const item = document.createElement("div");
+      item.className = "record";
+      appendText(item, "strong", capture.label ? `${capture.label} (${capture.mode})` : `${capture.capture_id} (${capture.mode})`);
+      appendText(
+        item,
+        "span",
+        `${capture.records ?? 0} records · ${formatBytes(capture.data_bytes)} · ${capture.finished ? "complete" : "receiving"}`
+      );
+      appendText(item, "small", capture.first_received_at || capture.capture_id);
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const dataLink = document.createElement("a");
+      dataLink.className = "node-link";
+      dataLink.href = capture.data_download_url;
+      dataLink.textContent = "Download data";
+      const metaLink = document.createElement("a");
+      metaLink.className = "node-link";
+      metaLink.href = capture.metadata_download_url;
+      metaLink.textContent = "Metadata";
+      actions.append(dataLink, metaLink);
+      item.appendChild(actions);
+      return item;
+    })
+  );
+}
+
+async function refreshCaptures() {
+  const payload = await readJson("/api/captures");
+  renderCaptures(payload.captures || []);
+  return payload;
 }
 
 function renderMacHistogram(status) {
@@ -839,7 +902,10 @@ function renderNodeStatus(status) {
     "source_filtered_samples",
     "packet_count",
     "last_packet_ms",
-    "calibrating"
+    "calibrating",
+    "capture_active",
+    "capture_records",
+    "capture_drops"
   ];
   const senderKeys = [
     "role",
@@ -863,12 +929,18 @@ function renderNodeStatus(status) {
   if (selectedNodeRole === "csi_sender" && nodeConfigFormEl.elements.sta_mac) {
     nodeConfigFormEl.elements.sta_mac.value = status?.sta_mac ?? "";
   }
+  const displayStatus = {
+    ...status,
+    capture_active: status?.capture?.active,
+    capture_records: status?.capture?.records,
+    capture_drops: status?.capture?.drops
+  };
   nodeStatusDetailsEl.replaceChildren(
     ...keys.map((key) => {
       const row = document.createElement("div");
       const label = appendText(row, "dt", key);
       appendHelp(label, NODE_STATUS_HELP[key] || "Live status value reported by the ESP32 node.");
-      const value = status?.[key];
+      const value = displayStatus?.[key];
       const display = ["movement_score", "baseline_noise"].includes(key) ? formatScore(value) : String(value ?? "n/a");
       appendText(row, "dd", display);
       return row;
@@ -1045,9 +1117,13 @@ async function openNodeSettings(deviceId) {
     await runNodeAction(async () => {
       await refreshSelectedNodeCalibration();
     });
+    await runNodeAction(async () => {
+      await refreshCaptures();
+    });
   } else {
     nodeCalibrationFormEl.reset();
     nodeCalibrationFormEl.elements.valid.value = "sender";
+    capturesListEl.textContent = "CSI captures are available on receiver nodes.";
   }
 
   if (config) {
@@ -1068,6 +1144,9 @@ function closeNodeSettings() {
   nodeSourceMacDiagnosticsEl.replaceChildren();
   nodeConfigFormEl.reset();
   nodeCalibrationFormEl.reset();
+  nodeCaptureFormEl.reset();
+  capturesListEl.replaceChildren();
+  nodeCaptureMessageEl.textContent = "";
   setNodeSettingsMessage("");
 }
 
@@ -1673,6 +1752,38 @@ document.querySelector("#delete-node-calibration").addEventListener("click", asy
     await refreshSelectedNodeStatus();
     await refreshSelectedNodeCalibration();
   }, "Calibration deleted.");
+});
+
+nodeCaptureFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (selectedNodeRole === "csi_sender") return;
+  await runNodeAction(async () => {
+    const form = new FormData(nodeCaptureFormEl);
+    const result = await postJson(`/api/nodes/${selectedNodeDeviceId}/capture/start`, {
+      duration_seconds: Number(form.get("duration_seconds") || 30),
+      mode: String(form.get("mode") || "features"),
+      label: String(form.get("label") || "").trim()
+    });
+    nodeCaptureMessageEl.textContent = `Capture started: ${result.capture_id}`;
+    await refreshSelectedNodeStatus();
+    await refreshCaptures();
+    return result;
+  }, null);
+});
+
+document.querySelector("#stop-node-capture").addEventListener("click", async () => {
+  if (selectedNodeRole === "csi_sender") return;
+  await runNodeAction(async () => {
+    await postJson(`/api/nodes/${selectedNodeDeviceId}/capture/stop`);
+    await refreshSelectedNodeStatus();
+    await refreshCaptures();
+  }, "Capture stop requested.");
+});
+
+document.querySelector("#refresh-captures").addEventListener("click", async () => {
+  await runNodeAction(async () => {
+    await refreshCaptures();
+  }, "Capture list refreshed.");
 });
 
 nodeConfigFormEl.addEventListener("submit", async (event) => {

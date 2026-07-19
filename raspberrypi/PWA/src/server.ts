@@ -17,6 +17,7 @@ const publicDir = path.resolve(__dirname, "..", "public");
 const db = new AlarmDatabase(appConfig.databasePath, appConfig.sqlCipherKey);
 const DEFAULT_HISTORY_HOURS = 0.5;
 const MAX_HISTORY_HOURS = 24;
+const CAPTURE_ID_RE = /^[A-Za-z0-9_. -]{1,40}$/;
 
 // The Python worker can be polled by browsers via /api/status and by the
 // background timer below. Cache the most recent good response briefly so the PWA
@@ -316,6 +317,53 @@ async function fetchNodeJson(deviceId: number, apiPath: string, init: RequestIni
   }
 }
 
+function safeCaptureId(value: unknown) {
+  const captureId = String(value ?? "").trim();
+  if (!CAPTURE_ID_RE.test(captureId)) {
+    throw new Error("capture_id contains unsupported characters");
+  }
+  return captureId;
+}
+
+function createCaptureId(deviceId: number) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${stamp}-node${deviceId.toString(16).padStart(2, "0")}`;
+}
+
+async function listCaptures() {
+  await fs.mkdir(appConfig.captureDir, { recursive: true });
+  const entries = await fs.readdir(appConfig.captureDir, { withFileTypes: true });
+  const captures = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      continue;
+    }
+    const filePath = path.join(appConfig.captureDir, entry.name);
+    try {
+      const metadata = JSON.parse(await fs.readFile(filePath, "utf8"));
+      const captureId = safeCaptureId(metadata.capture_id ?? entry.name.slice(0, -5));
+      const dataPath = path.join(appConfig.captureDir, `${captureId}.ndjson`);
+      let dataBytes = 0;
+      try {
+        dataBytes = (await fs.stat(dataPath)).size;
+      } catch {
+        dataBytes = 0;
+      }
+      captures.push({
+        ...metadata,
+        capture_id: captureId,
+        data_bytes: dataBytes,
+        data_download_url: `/api/captures/${encodeURIComponent(captureId)}/download`,
+        metadata_download_url: `/api/captures/${encodeURIComponent(captureId)}/metadata`
+      });
+    } catch {
+      continue;
+    }
+  }
+  captures.sort((a, b) => String(b.first_received_at ?? b.capture_id).localeCompare(String(a.first_received_at ?? a.capture_id)));
+  return captures;
+}
+
 /**
  * Constructs the Fastify application and registers all HTTP routes.
  *
@@ -408,6 +456,31 @@ export function buildServer() {
       lastAbove: false
     });
     return { ok: true, trigger: db.getMovementTriggerSettings() };
+  });
+
+  server.get("/api/captures", async () => ({
+    ok: true,
+    captures: await listCaptures()
+  }));
+
+  server.get<{ Params: { captureId: string } }>("/api/captures/:captureId/download", async (request, reply) => {
+    const captureId = safeCaptureId(decodeURIComponent(request.params.captureId));
+    const filePath = path.join(appConfig.captureDir, `${captureId}.ndjson`);
+    const body = await fs.readFile(filePath, "utf8");
+    reply
+      .type("application/x-ndjson; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${captureId}.ndjson"`);
+    return body;
+  });
+
+  server.get<{ Params: { captureId: string } }>("/api/captures/:captureId/metadata", async (request, reply) => {
+    const captureId = safeCaptureId(decodeURIComponent(request.params.captureId));
+    const filePath = path.join(appConfig.captureDir, `${captureId}.json`);
+    const body = await fs.readFile(filePath, "utf8");
+    reply
+      .type("application/json; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${captureId}.json"`);
+    return body;
   });
 
   // Browser push endpoints. VAPID public key is safe to expose; subscriptions
@@ -536,6 +609,46 @@ export function buildServer() {
 
   server.delete<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/calibration", async (request, reply) => {
     const result = await fetchNodeJson(Number(request.params.deviceId), "/api/calibration", { method: "DELETE" });
+    reply.code(result.status);
+    return result.body;
+  });
+
+  server.get<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/capture/status", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/api/capture/status");
+    reply.code(result.status);
+    return result.body;
+  });
+
+  server.post<{ Params: { deviceId: string }; Body: { duration_seconds?: number; mode?: string; label?: string } }>(
+    "/api/nodes/:deviceId/capture/start",
+    async (request, reply) => {
+      const deviceId = Number(request.params.deviceId);
+      const duration = Number(request.body?.duration_seconds ?? 30);
+      const safeDuration = Math.min(300, Math.max(5, Number.isFinite(duration) ? duration : 30));
+      const mode = request.body?.mode === "raw_csi" ? "raw_csi" : "features";
+      const label = String(request.body?.label ?? "").slice(0, 60);
+      const captureId = createCaptureId(deviceId);
+      const result = await fetchNodeJson(deviceId, "/api/capture/start", {
+        method: "POST",
+        body: JSON.stringify({
+          capture_id: captureId,
+          duration_seconds: safeDuration,
+          mode,
+          label
+        })
+      });
+      reply.code(result.status);
+      return {
+        ...(typeof result.body === "object" && result.body !== null ? result.body : {}),
+        capture_id: captureId,
+        download_url: `/api/captures/${encodeURIComponent(captureId)}/download`,
+        metadata_url: `/api/captures/${encodeURIComponent(captureId)}/metadata`
+      };
+    }
+  );
+
+  server.post<{ Params: { deviceId: string } }>("/api/nodes/:deviceId/capture/stop", async (request, reply) => {
+    const result = await fetchNodeJson(Number(request.params.deviceId), "/api/capture/stop", { method: "POST" });
     reply.code(result.status);
     return result.body;
   });

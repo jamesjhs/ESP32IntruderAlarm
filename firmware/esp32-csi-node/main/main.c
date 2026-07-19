@@ -103,12 +103,24 @@
 #define LOG_LINE_COUNT 100
 #define LOG_LINE_LEN 192
 #define CSI_MAC_HISTOGRAM_LEN 10
+#define CAPTURE_QUEUE_LEN 64
+#define CAPTURE_MAX_RAW_BYTES 128
+#define CAPTURE_BATCH_RECORDS 12
+#define CAPTURE_MIN_DURATION_S 5
+#define CAPTURE_DEFAULT_DURATION_S 30
+#define CAPTURE_MAX_DURATION_S 300
+#define DEFAULT_PI_CAPTURE_PATH "/capture"
 
 typedef enum {
     SENSE_IDLE = 0,
     SENSE_BOOST,
     SENSE_COOLDOWN,
 } sense_state_t;
+
+typedef enum {
+    CAPTURE_MODE_FEATURES = 0,
+    CAPTURE_MODE_RAW_CSI,
+} capture_mode_t;
 
 typedef struct {
     int64_t timestamp_us;
@@ -119,6 +131,19 @@ typedef struct {
     float shape_variance;
     float phase_proxy;
 } csi_sample_t;
+
+typedef struct {
+    int64_t timestamp_us;
+    int16_t rssi;
+    int16_t noise_floor;
+    uint16_t csi_len;
+    uint16_t raw_len;
+    uint8_t mac[6];
+    float energy;
+    float shape_variance;
+    float phase_proxy;
+    uint8_t raw[CAPTURE_MAX_RAW_BYTES];
+} csi_capture_record_t;
 
 typedef struct {
     int32_t device_id;
@@ -176,6 +201,21 @@ typedef struct {
 } node_status_t;
 
 typedef struct {
+    bool active;
+    bool final_sent;
+    capture_mode_t mode;
+    char capture_id[40];
+    char label[64];
+    int64_t started_us;
+    int64_t until_us;
+    uint32_t duration_s;
+    uint32_t records;
+    uint32_t drops;
+    uint32_t posts;
+    uint32_t post_errors;
+} capture_status_t;
+
+typedef struct {
     bool valid;
     float baseline_energy;
     float baseline_variance;
@@ -189,6 +229,7 @@ typedef struct {
 
 static const char *TAG = "csi-node";
 static QueueHandle_t csi_queue;
+static QueueHandle_t capture_queue;
 static SemaphoreHandle_t state_lock;
 static EventGroupHandle_t wifi_event_group;
 static node_config_t g_config;
@@ -210,6 +251,11 @@ static volatile uint32_t csi_filtered_samples;
 static volatile uint32_t csi_throttled_samples;
 static volatile uint32_t csi_queue_drops;
 static volatile uint32_t csi_accepted_samples;
+static volatile bool capture_active;
+static volatile capture_mode_t capture_mode;
+static volatile int64_t capture_until_us;
+static volatile uint32_t capture_records;
+static volatile uint32_t capture_drops;
 static volatile bool csi_source_filter_enabled;
 static uint8_t csi_source_mac[6];
 static volatile bool csi_configured_source_mac_valid;
@@ -230,6 +276,7 @@ static volatile bool calibration_apply_requested;
 static volatile bool identify_active;
 static volatile int64_t identify_until_us;
 static TaskHandle_t identify_task_handle;
+static capture_status_t g_capture;
 static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
 static vprintf_like_t original_log_vprintf;
 static char log_lines[LOG_LINE_COUNT][LOG_LINE_LEN];
@@ -293,6 +340,7 @@ static void install_log_capture(void)
 }
 
 static bool parse_mac(const char *value, uint8_t out[6]);
+static const char *capture_mode_name(capture_mode_t mode);
 
 /**
  * Introduction:
@@ -1356,6 +1404,28 @@ static void csi_rx_cb(void *ctx, wifi_csi_info_t *info)
             }
         }
     }
+
+    if (capture_active && now < capture_until_us && capture_queue != NULL) {
+        csi_capture_record_t record = {
+            .timestamp_us = now,
+            .rssi = info->rx_ctrl.rssi,
+            .noise_floor = info->rx_ctrl.noise_floor,
+            .csi_len = info->len,
+            .energy = feature,
+            .shape_variance = shape_variance,
+            .phase_proxy = phase_proxy_sum / (float)pair_count,
+        };
+        memcpy(record.mac, info->mac, sizeof(record.mac));
+        if (capture_mode == CAPTURE_MODE_RAW_CSI) {
+            record.raw_len = info->len < CAPTURE_MAX_RAW_BYTES ? info->len : CAPTURE_MAX_RAW_BYTES;
+            memcpy(record.raw, info->buf, record.raw_len);
+        }
+        if (xQueueSend(capture_queue, &record, 0) == pdTRUE) {
+            increment_volatile_u32_saturated(&capture_records);
+        } else {
+            increment_volatile_u32_saturated(&capture_drops);
+        }
+    }
 }
 
 /**
@@ -2041,6 +2111,26 @@ static cJSON *status_to_json(void)
     cJSON_AddBoolToObject(root, "movement_detected", status.movement_detected);
     cJSON_AddStringToObject(root, "csi_source_mac", cfg.csi_source_mac);
     cJSON_AddBoolToObject(root, "csi_source_filter_enabled", cfg.csi_source_filter_enabled);
+    cJSON *capture = cJSON_AddObjectToObject(root, "capture");
+    if (capture != NULL) {
+        capture_status_t capture_status;
+        xSemaphoreTake(state_lock, portMAX_DELAY);
+        capture_status = g_capture;
+        capture_status.records = capture_records;
+        capture_status.drops = capture_drops;
+        xSemaphoreGive(state_lock);
+        bool active = capture_active && esp_timer_get_time() < capture_status.until_us;
+        cJSON_AddBoolToObject(capture, "active", active);
+        cJSON_AddStringToObject(capture, "capture_id", capture_status.capture_id);
+        cJSON_AddStringToObject(capture, "mode", capture_mode_name(capture_status.mode));
+        cJSON_AddStringToObject(capture, "label", capture_status.label);
+        cJSON_AddNumberToObject(capture, "duration_s", capture_status.duration_s);
+        cJSON_AddNumberToObject(capture, "records", capture_status.records);
+        cJSON_AddNumberToObject(capture, "drops", capture_status.drops);
+        cJSON_AddNumberToObject(capture, "posts", capture_status.posts);
+        cJSON_AddNumberToObject(capture, "post_errors", capture_status.post_errors);
+        cJSON_AddNumberToObject(capture, "remaining_ms", active ? (uint32_t)((capture_status.until_us - esp_timer_get_time()) / 1000LL) : 0);
+    }
     char last_mac_text[18] = {0};
     char last_filtered_mac_text[18] = {0};
     char last_accepted_mac_text[18] = {0};
@@ -2143,6 +2233,191 @@ static bool pi_response_acknowledged(const char *response, int http_status)
     bool acknowledged = cJSON_IsTrue(ok);
     cJSON_Delete(root);
     return acknowledged;
+}
+
+static const char *capture_mode_name(capture_mode_t mode)
+{
+    return mode == CAPTURE_MODE_RAW_CSI ? "raw_csi" : "features";
+}
+
+static capture_mode_t parse_capture_mode(const char *value)
+{
+    if (value != NULL && strcmp(value, "raw_csi") == 0) {
+        return CAPTURE_MODE_RAW_CSI;
+    }
+    return CAPTURE_MODE_FEATURES;
+}
+
+static void sanitize_capture_text(char *value, size_t value_len)
+{
+    if (value == NULL || value_len == 0) {
+        return;
+    }
+    value[value_len - 1] = '\0';
+    for (size_t i = 0; value[i] != '\0'; i++) {
+        char c = value[i];
+        if (!(isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == ' ')) {
+            value[i] = '_';
+        }
+    }
+}
+
+static void add_record_json(cJSON *records, const csi_capture_record_t *record, bool include_raw)
+{
+    cJSON *item = cJSON_CreateObject();
+    if (item == NULL) {
+        return;
+    }
+    char mac_text[18];
+    format_mac(record->mac, mac_text, sizeof(mac_text));
+    cJSON_AddNumberToObject(item, "timestamp_us", record->timestamp_us);
+    cJSON_AddStringToObject(item, "mac", mac_text);
+    cJSON_AddNumberToObject(item, "rssi", record->rssi);
+    cJSON_AddNumberToObject(item, "noise_floor", record->noise_floor);
+    cJSON_AddNumberToObject(item, "csi_len", record->csi_len);
+    cJSON_AddNumberToObject(item, "energy", record->energy);
+    cJSON_AddNumberToObject(item, "shape_variance", record->shape_variance);
+    cJSON_AddNumberToObject(item, "phase_proxy", record->phase_proxy);
+    if (include_raw && record->raw_len > 0) {
+        char raw_hex[(CAPTURE_MAX_RAW_BYTES * 2) + 1];
+        for (uint16_t i = 0; i < record->raw_len; i++) {
+            snprintf(raw_hex + (i * 2), sizeof(raw_hex) - (i * 2), "%02X", record->raw[i]);
+        }
+        cJSON_AddNumberToObject(item, "raw_len", record->raw_len);
+        cJSON_AddStringToObject(item, "raw_hex", raw_hex);
+    }
+    cJSON_AddItemToArray(records, item);
+}
+
+static bool post_capture_json(const node_config_t *cfg, cJSON *json)
+{
+    char *body = cJSON_PrintUnformatted(json);
+    if (body == NULL) {
+        return false;
+    }
+
+    bool ok = false;
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (sock >= 0) {
+        struct timeval timeout = {
+            .tv_sec = 3,
+            .tv_usec = 0,
+        };
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+        struct sockaddr_in dest = {0};
+        dest.sin_family = AF_INET;
+        dest.sin_port = htons(cfg->pi_port);
+        inet_pton(AF_INET, cfg->pi_ip, &dest.sin_addr);
+
+        if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) == 0) {
+            char header[384];
+            int header_len = snprintf(header, sizeof(header),
+                                      "POST %s HTTP/1.1\r\n"
+                                      "Host: %s:%u\r\n"
+                                      "Content-Type: application/json\r\n"
+                                      "Content-Length: %u\r\n"
+                                      "Connection: close\r\n\r\n",
+                                      DEFAULT_PI_CAPTURE_PATH, cfg->pi_ip, (unsigned)cfg->pi_port,
+                                      (unsigned)strlen(body));
+            if (header_len > 0 && header_len < (int)sizeof(header) &&
+                send(sock, header, header_len, 0) == header_len &&
+                send(sock, body, strlen(body), 0) == (int)strlen(body)) {
+                char response[160];
+                int len = recv(sock, response, sizeof(response) - 1, 0);
+                if (len > 0) {
+                    response[len] = '\0';
+                    int http_status = 0;
+                    sscanf(response, "HTTP/%*s %d", &http_status);
+                    ok = http_status >= 200 && http_status < 300;
+                }
+            }
+        }
+        close(sock);
+    }
+    free(body);
+    return ok;
+}
+
+static cJSON *capture_payload_json(const node_config_t *cfg, const capture_status_t *capture, cJSON *records, bool finished)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        return NULL;
+    }
+    cJSON_AddStringToObject(root, "capture_id", capture->capture_id);
+    cJSON_AddNumberToObject(root, "device_id", cfg->device_id);
+    cJSON_AddStringToObject(root, "name", cfg->name);
+    cJSON_AddStringToObject(root, "mode", capture_mode_name(capture->mode));
+    cJSON_AddStringToObject(root, "label", capture->label);
+    cJSON_AddNumberToObject(root, "started_us", capture->started_us);
+    cJSON_AddNumberToObject(root, "duration_s", capture->duration_s);
+    cJSON_AddNumberToObject(root, "records_total", capture_records);
+    cJSON_AddNumberToObject(root, "drops_total", capture_drops);
+    cJSON_AddBoolToObject(root, "finished", finished);
+    cJSON_AddItemToObject(root, "records", records);
+    return root;
+}
+
+static void capture_upload_task(void *arg)
+{
+    (void)arg;
+    csi_capture_record_t batch[CAPTURE_BATCH_RECORDS];
+
+    while (true) {
+        if (capture_active && esp_timer_get_time() >= capture_until_us) {
+            capture_active = false;
+        }
+
+        size_t count = 0;
+        while (count < CAPTURE_BATCH_RECORDS &&
+               xQueueReceive(capture_queue, &batch[count], pdMS_TO_TICKS(count == 0 ? 1000 : 0)) == pdTRUE) {
+            count++;
+        }
+
+        bool should_send_final = false;
+        capture_status_t capture;
+        node_config_t cfg;
+        xSemaphoreTake(state_lock, portMAX_DELAY);
+        if (!capture_active && g_capture.active && !g_capture.final_sent && count == 0) {
+            should_send_final = true;
+            g_capture.active = false;
+            g_capture.final_sent = true;
+        }
+        capture = g_capture;
+        cfg = g_config;
+        xSemaphoreGive(state_lock);
+
+        if (cfg.pi_ip[0] == '\0' || (!capture.active && !should_send_final && count == 0)) {
+            continue;
+        }
+
+        cJSON *records = cJSON_CreateArray();
+        if (records == NULL) {
+            continue;
+        }
+        for (size_t i = 0; i < count; i++) {
+            add_record_json(records, &batch[i], capture.mode == CAPTURE_MODE_RAW_CSI);
+        }
+        cJSON *payload = capture_payload_json(&cfg, &capture, records, should_send_final);
+        if (payload == NULL) {
+            cJSON_Delete(records);
+            continue;
+        }
+        bool ok = post_capture_json(&cfg, payload);
+        cJSON_Delete(payload);
+
+        xSemaphoreTake(state_lock, portMAX_DELAY);
+        if (ok) {
+            g_capture.posts++;
+        } else {
+            g_capture.post_errors++;
+        }
+        g_capture.records = capture_records;
+        g_capture.drops = capture_drops;
+        xSemaphoreGive(state_lock);
+    }
 }
 
 static void pi_telemetry_task(void *arg)
@@ -2826,6 +3101,118 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     return err;
 }
 
+static cJSON *capture_status_to_json(void)
+{
+    capture_status_t capture;
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    capture = g_capture;
+    capture.records = capture_records;
+    capture.drops = capture_drops;
+    xSemaphoreGive(state_lock);
+
+    bool active = capture_active && esp_timer_get_time() < capture.until_us;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "active", active);
+    cJSON_AddStringToObject(root, "capture_id", capture.capture_id);
+    cJSON_AddStringToObject(root, "mode", capture_mode_name(capture.mode));
+    cJSON_AddStringToObject(root, "label", capture.label);
+    cJSON_AddNumberToObject(root, "duration_s", capture.duration_s);
+    cJSON_AddNumberToObject(root, "records", capture.records);
+    cJSON_AddNumberToObject(root, "drops", capture.drops);
+    cJSON_AddNumberToObject(root, "posts", capture.posts);
+    cJSON_AddNumberToObject(root, "post_errors", capture.post_errors);
+    cJSON_AddNumberToObject(root, "remaining_ms", active ? (uint32_t)((capture.until_us - esp_timer_get_time()) / 1000LL) : 0);
+    return root;
+}
+
+static esp_err_t capture_status_get_handler(httpd_req_t *req)
+{
+    cJSON *json = capture_status_to_json();
+    esp_err_t err = send_json(req, json);
+    cJSON_Delete(json);
+    return err;
+}
+
+static esp_err_t capture_start_post_handler(httpd_req_t *req)
+{
+    char body[MAX_POST_BODY];
+    if (read_request_body(req, body, sizeof(body)) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    uint32_t duration_s = CAPTURE_DEFAULT_DURATION_S;
+    cJSON *duration = cJSON_GetObjectItem(root, "duration_seconds");
+    if (cJSON_IsNumber(duration)) {
+        duration_s = (uint32_t)duration->valuedouble;
+    }
+    duration_s = clamp_u32(duration_s, CAPTURE_MIN_DURATION_S, CAPTURE_MAX_DURATION_S);
+
+    char capture_id[40];
+    snprintf(capture_id, sizeof(capture_id), "node%02ld-%lld", (long)g_config.device_id, esp_timer_get_time());
+    cJSON *id = cJSON_GetObjectItem(root, "capture_id");
+    if (cJSON_IsString(id) && id->valuestring != NULL && id->valuestring[0] != '\0') {
+        strlcpy(capture_id, id->valuestring, sizeof(capture_id));
+    }
+    sanitize_capture_text(capture_id, sizeof(capture_id));
+
+    char label[64] = "";
+    cJSON *label_json = cJSON_GetObjectItem(root, "label");
+    if (cJSON_IsString(label_json) && label_json->valuestring != NULL) {
+        strlcpy(label, label_json->valuestring, sizeof(label));
+    }
+    sanitize_capture_text(label, sizeof(label));
+
+    cJSON *mode_json = cJSON_GetObjectItem(root, "mode");
+    capture_mode_t mode = parse_capture_mode(cJSON_IsString(mode_json) ? mode_json->valuestring : NULL);
+    cJSON_Delete(root);
+
+    if (capture_queue != NULL) {
+        xQueueReset(capture_queue);
+    }
+    capture_records = 0;
+    capture_drops = 0;
+    int64_t now = esp_timer_get_time();
+
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    memset(&g_capture, 0, sizeof(g_capture));
+    g_capture.active = true;
+    g_capture.mode = mode;
+    strlcpy(g_capture.capture_id, capture_id, sizeof(g_capture.capture_id));
+    strlcpy(g_capture.label, label, sizeof(g_capture.label));
+    g_capture.started_us = now;
+    g_capture.until_us = now + ((int64_t)duration_s * 1000000LL);
+    g_capture.duration_s = duration_s;
+    capture_mode = mode;
+    capture_until_us = g_capture.until_us;
+    capture_active = true;
+    xSemaphoreGive(state_lock);
+
+    ESP_LOGI(TAG, "CSI capture %s started for %lu seconds in %s mode", capture_id, (unsigned long)duration_s, capture_mode_name(mode));
+    cJSON *reply = capture_status_to_json();
+    esp_err_t err = send_json(req, reply);
+    cJSON_Delete(reply);
+    return err;
+}
+
+static esp_err_t capture_stop_post_handler(httpd_req_t *req)
+{
+    capture_active = false;
+    xSemaphoreTake(state_lock, portMAX_DELAY);
+    g_capture.until_us = esp_timer_get_time();
+    xSemaphoreGive(state_lock);
+    cJSON *reply = capture_status_to_json();
+    esp_err_t err = send_json(req, reply);
+    cJSON_Delete(reply);
+    return err;
+}
+
 static esp_err_t options_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "204 No Content");
@@ -2985,7 +3372,7 @@ static void start_http_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = 24;
 
     ESP_ERROR_CHECK(httpd_start(&http_server, &config));
 
@@ -3002,6 +3389,10 @@ static void start_http_server(void)
     httpd_uri_t calibration_post = {.uri = "/api/calibration", .method = HTTP_POST, .handler = calibration_post_handler};
     httpd_uri_t calibration_options = {.uri = "/api/calibration", .method = HTTP_OPTIONS, .handler = options_handler};
     httpd_uri_t calibration_delete = {.uri = "/api/calibration", .method = HTTP_DELETE, .handler = calibration_delete_handler};
+    httpd_uri_t capture_status = {.uri = "/api/capture/status", .method = HTTP_GET, .handler = capture_status_get_handler};
+    httpd_uri_t capture_start = {.uri = "/api/capture/start", .method = HTTP_POST, .handler = capture_start_post_handler};
+    httpd_uri_t capture_stop = {.uri = "/api/capture/stop", .method = HTTP_POST, .handler = capture_stop_post_handler};
+    httpd_uri_t capture_options = {.uri = "/api/capture/*", .method = HTTP_OPTIONS, .handler = options_handler};
     httpd_uri_t provision = {.uri = "/api/provision", .method = HTTP_POST, .handler = provision_post_handler};
     httpd_uri_t reset_wifi = {.uri = "/api/reset-wifi", .method = HTTP_POST, .handler = reset_wifi_post_handler};
     httpd_uri_t log_slash = {.uri = "/log/", .method = HTTP_GET, .handler = log_get_handler};
@@ -3021,6 +3412,10 @@ static void start_http_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_post));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_options));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &calibration_delete));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &capture_status));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &capture_start));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &capture_stop));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &capture_options));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &provision));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &reset_wifi));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &log_slash));
@@ -3052,9 +3447,10 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
 
     csi_queue = xQueueCreate(CSI_QUEUE_LEN, sizeof(csi_sample_t));
+    capture_queue = xQueueCreate(CAPTURE_QUEUE_LEN, sizeof(csi_capture_record_t));
     state_lock = xSemaphoreCreateMutex();
     wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(csi_queue == NULL || state_lock == NULL || wifi_event_group == NULL ? ESP_ERR_NO_MEM : ESP_OK);
+    ESP_ERROR_CHECK(csi_queue == NULL || capture_queue == NULL || state_lock == NULL || wifi_event_group == NULL ? ESP_ERR_NO_MEM : ESP_OK);
 
     config_needs_auto_name = load_config(&g_config) != ESP_OK;
     if (load_calibration(&g_calibration) == ESP_OK && g_calibration.valid) {
@@ -3072,6 +3468,7 @@ void app_main(void)
     init_wifi();
     start_http_server();
     xTaskCreate(csi_aggregation_task, "csi_aggregation", ESP32_INTRUDER_CSI_AGGREGATION_STACK, NULL, 5, NULL);
+    xTaskCreate(capture_upload_task, "csi_capture", PI_TELEMETRY_STACK, NULL, 4, NULL);
     xTaskCreate(pi_telemetry_task, "pi_telemetry", PI_TELEMETRY_STACK, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "ESP32 CSI node ready (%s, %s profile)", ESP32_INTRUDER_BOARD_VARIANT, ESP32_INTRUDER_HARDWARE_PROFILE);

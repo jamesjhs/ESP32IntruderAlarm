@@ -20,8 +20,11 @@ Interactions:
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import socket
 from contextlib import suppress
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from aiohttp import web
@@ -29,6 +32,25 @@ from aiohttp import web
 from .config import WorkerConfig, load_config
 from .state import NodeStore
 from .views import render_index_html
+
+
+CAPTURE_ID_RE = re.compile(r"^[A-Za-z0-9_. -]{1,40}$")
+
+
+def safe_capture_id(value: object) -> str:
+    """Validate a Pi-generated capture id before using it as a filename stem."""
+    capture_id = str(value or "").strip()
+    if not CAPTURE_ID_RE.fullmatch(capture_id):
+        raise ValueError("capture_id contains unsupported characters")
+    return capture_id
+
+
+def capture_paths(config: WorkerConfig, capture_id: str) -> tuple[Any, Any]:
+    """Return the NDJSON data path and JSON metadata path for one capture."""
+    config.capture_dir.mkdir(parents=True, exist_ok=True)
+    data_path = config.capture_dir / f"{capture_id}.ndjson"
+    meta_path = config.capture_dir / f"{capture_id}.json"
+    return data_path, meta_path
 
 
 async def udp_probe_loop(config: WorkerConfig) -> None:
@@ -97,6 +119,65 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
             }
         )
 
+    async def receive_capture(request: web.Request) -> web.Response:
+        """Append a chunk of CSI capture records to a Pi-side capture file."""
+        try:
+            payload: dict[str, Any] = await request.json()
+            capture_id = safe_capture_id(payload.get("capture_id"))
+            records = payload.get("records")
+            if not isinstance(records, list):
+                raise ValueError("records must be a list")
+            data_path, meta_path = capture_paths(config, capture_id)
+        except ValueError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON capture payload"}, status=400)
+
+        received_at = datetime.now(timezone.utc).isoformat()
+        existing_meta: dict[str, Any] = {}
+        if meta_path.exists():
+            with suppress(Exception):
+                existing_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+        with data_path.open("a", encoding="utf-8") as handle:
+            for record in records:
+                if isinstance(record, dict):
+                    record.setdefault("capture_id", capture_id)
+                    record.setdefault("device_id", payload.get("device_id"))
+                    record.setdefault("mode", payload.get("mode"))
+                    handle.write(json.dumps(record, separators=(",", ":")))
+                    handle.write("\n")
+
+        total_records = int(existing_meta.get("records", 0)) + sum(1 for record in records if isinstance(record, dict))
+        metadata = {
+            **existing_meta,
+            "capture_id": capture_id,
+            "device_id": payload.get("device_id"),
+            "name": payload.get("name"),
+            "mode": payload.get("mode", "features"),
+            "label": payload.get("label", ""),
+            "duration_s": payload.get("duration_s"),
+            "started_us": payload.get("started_us"),
+            "first_received_at": existing_meta.get("first_received_at", received_at),
+            "last_received_at": received_at,
+            "finished": bool(payload.get("finished")),
+            "records": total_records,
+            "records_total_reported": payload.get("records_total"),
+            "drops_total_reported": payload.get("drops_total"),
+            "data_file": data_path.name,
+        }
+        meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+        return web.json_response(
+            {
+                "ok": True,
+                "ack": "capture_received",
+                "capture_id": capture_id,
+                "records": total_records,
+                "finished": metadata["finished"],
+            }
+        )
+
     async def status(_: web.Request) -> web.Response:
         """Return the full live worker status consumed by the PWA service."""
         return web.json_response(store.status(config.version))
@@ -125,6 +206,7 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/healthz", healthz)
     app.router.add_post(config.telemetry_path, receive_telemetry)
+    app.router.add_post(config.capture_path, receive_capture)
     app.router.add_get("/internal/status", status)
     app.router.add_get("/internal/nodes/{device_id:\\d+}", node)
     app.on_startup.append(start_background)

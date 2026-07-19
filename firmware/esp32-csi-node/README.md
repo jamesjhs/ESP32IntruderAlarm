@@ -199,6 +199,11 @@ values for inspection or manual repair:
 - `POST /api/calibrate` starts a 10 second stillness calibration.
 - `POST /api/identify` rapidly blinks the node's blue LED for 10 seconds, then
   restores the normal movement LED state.
+- `GET /api/capture/status` returns the current bounded CSI capture state.
+- `POST /api/capture/start` starts an on-demand capture. The Pi dashboard sends
+  `duration_seconds`, defaulting to 30 seconds, `mode` as `features` or
+  `raw_csi`, an optional label, and a Pi-generated `capture_id`.
+- `POST /api/capture/stop` stops the current capture early.
 - `GET /api/calibration` returns the persisted stillness calibration baseline.
 - `POST /api/calibration` accepts partial JSON calibration baseline updates,
   saves them to NVS, and applies them to the live detector.

@@ -12,6 +12,7 @@ export interface AppConfig {
   workerInternalUrl: string;
   databasePath: string;
   sqlCipherKey: string;
+  captureDir: string;
   backupDir: string;
   vapidSubject: string;
 }
@@ -29,6 +30,7 @@ export function loadConfig(): AppConfig {
     workerInternalUrl: process.env.WORKER_INTERNAL_URL ?? "http://127.0.0.1:3005",
     databasePath: process.env.ALARM_DATABASE_PATH ?? path.resolve(__dirname, "..", "..", "data", "alarm.sqlite"),
     sqlCipherKey: process.env.SQLCIPHER_KEY ?? "",
+    captureDir: process.env.ESP32_CAPTURE_DIR ?? path.resolve(__dirname, "..", "..", "data", "captures"),
     backupDir: process.env.ALARM_BACKUP_DIR ?? path.resolve(__dirname, "..", "..", "backups"),
     vapidSubject: process.env.VAPID_SUBJECT ?? "mailto:admin@example.local"
   };

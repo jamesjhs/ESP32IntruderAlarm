@@ -506,7 +506,8 @@ dd {
   gap: 16px;
 }
 
-.node-mac-histogram-panel {
+.node-mac-histogram-panel,
+.node-capture-panel {
   grid-column: 1 / -1;
 }
 

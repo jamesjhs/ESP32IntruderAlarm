@@ -47,6 +47,8 @@ class WorkerConfig:
     host: str
     port: int
     telemetry_path: str
+    capture_path: str
+    capture_dir: Path
     udp_probe_enabled: bool
     udp_probe_target_ip: str
     udp_probe_target_port: int
@@ -60,12 +62,19 @@ def load_config() -> WorkerConfig:
     telemetry_path = os.getenv("ESP32_TELEMETRY_PATH", "/espdata")
     if not telemetry_path.startswith("/"):
         telemetry_path = f"/{telemetry_path}"
+    capture_path = os.getenv("ESP32_CAPTURE_PATH", "/capture")
+    if not capture_path.startswith("/"):
+        capture_path = f"/{capture_path}"
+    here = Path(__file__).resolve()
+    raspberrypi_dir = here.parents[3]
 
     return WorkerConfig(
         version=read_shared_version(),
         host=os.getenv("WORKER_HOST", "0.0.0.0"),
         port=int(os.getenv("WORKER_PORT", "3005")),
         telemetry_path=telemetry_path,
+        capture_path=capture_path,
+        capture_dir=Path(os.getenv("ESP32_CAPTURE_DIR", raspberrypi_dir / "data" / "captures")),
         udp_probe_enabled=_bool_env("UDP_PROBE_ENABLED", False),
         udp_probe_target_ip=os.getenv("UDP_PROBE_TARGET_IP", ""),
         udp_probe_target_port=int(os.getenv("UDP_PROBE_TARGET_PORT", "9")),
