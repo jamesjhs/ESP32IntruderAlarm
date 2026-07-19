@@ -408,6 +408,67 @@ function nodeRecordFor(deviceId) {
   return currentAdmin?.nodes?.find((node) => Number(node.deviceId) === Number(deviceId)) || null;
 }
 
+/** Normalizes MAC text so histogram entries can be matched to known node data. */
+function normalizeMac(value) {
+  const text = String(value ?? "").trim().toUpperCase().replaceAll("-", ":");
+  return /^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/.test(text) ? text : "";
+}
+
+/** Builds a MAC-to-node lookup from live telemetry and the Pi's persisted registry. */
+function knownMacDetails() {
+  const details = new Map();
+
+  const upsert = (mac, detail) => {
+    const normalized = normalizeMac(mac);
+    if (!normalized) return;
+    const existing = details.get(normalized);
+    if (!existing || (detail.match === "station" && existing.match !== "station") || (!existing.ip && detail.ip)) {
+      details.set(normalized, detail);
+    }
+  };
+
+  const addNode = (node, deviceIdKey) => {
+    const deviceId = Number(node?.[deviceIdKey]);
+    const registryNode = nodeRecordFor(deviceId);
+    const payload = node?.payload || {};
+    const name = String(registryNode?.name || node?.name || `Node ${Number.isFinite(deviceId) ? deviceId : ""}`).trim();
+    const ip = String(node?.ip || registryNode?.ip || "").trim();
+    const role = payload.role === "csi_sender" ? "sender" : "node";
+
+    upsert(payload.sta_mac, { name, ip, role, match: "station" });
+    upsert(payload.csi_source_mac, { name: `Configured for ${name}`, ip: "", role: "source", match: "configured" });
+  };
+
+  for (const node of currentAdmin?.nodes ?? []) addNode(node, "deviceId");
+  for (const node of lastStatusNodes) addNode(node, "device_id");
+  return details;
+}
+
+/** Selects or clears the receiver CSI source from a histogram row checkbox. */
+async function setHistogramSourceMac(mac, enabled) {
+  if (selectedNodeDeviceId === null || selectedNodeRole !== "csi_receiver") return;
+  const selectedMac = normalizeMac(mac);
+  if (enabled && !selectedMac) return;
+
+  const payload = {
+    csi_source_mac: enabled ? selectedMac : "",
+    csi_source_filter_enabled: enabled
+  };
+  if (nodeConfigFormEl.elements.csi_source_mac) {
+    nodeConfigFormEl.elements.csi_source_mac.value = payload.csi_source_mac;
+  }
+  if (nodeConfigFormEl.elements.csi_source_filter_enabled) {
+    nodeConfigFormEl.elements.csi_source_filter_enabled.checked = payload.csi_source_filter_enabled;
+  }
+
+  await runNodeAction(async () => {
+    const saved = await postJson(`/api/nodes/${selectedNodeDeviceId}/config`, payload);
+    populateNodeConfigForm(saved);
+    await refreshSelectedNodeStatus();
+    await refreshStatus();
+  }, enabled ? `CSI source set to ${selectedMac}.` : "CSI source filter disabled.");
+}
+
 /**
  * Renders the ESP32 Nodes card from live worker telemetry plus Pi registry data.
  *
@@ -679,20 +740,35 @@ function renderMacHistogram(status) {
   }
 
   const maxCount = Math.max(...entries.map((entry) => Number(entry.count || 0)), 1);
+  const macDetails = knownMacDetails();
+  const activeSourceMac = status?.csi_source_filter_enabled ? normalizeMac(status?.csi_source_mac || status?.csi_source_mac_diagnostics?.mac) : "";
   nodeMacHistogramEl.className = "mac-histogram";
   nodeMacHistogramEl.replaceChildren(
     ...entries.map((entry) => {
+      const entryMac = normalizeMac(entry.mac);
       const row = document.createElement("div");
       row.className = "mac-histogram-row";
+      const sourceInput = document.createElement("input");
+      sourceInput.type = "checkbox";
+      sourceInput.className = "mac-source-checkbox";
+      sourceInput.checked = Boolean(entryMac && entryMac === activeSourceMac);
+      sourceInput.title = sourceInput.checked ? "This MAC is the active CSI source." : "Use this MAC as the CSI source.";
+      sourceInput.addEventListener("change", () => setHistogramSourceMac(entry.mac, sourceInput.checked));
       const label = document.createElement("div");
       label.className = "mac-histogram-label";
       appendText(label, "span", String(entry.mac));
+      const detail = macDetails.get(normalizeMac(entry.mac));
+      if (detail) {
+        appendText(label, "small", [detail.name, detail.ip].filter(Boolean).join(" · "), "mac-histogram-device");
+        row.title = detail.ip ? `${detail.name} (${detail.ip})` : detail.name;
+      }
       const track = document.createElement("div");
       track.className = "mac-histogram-track";
       const bar = document.createElement("div");
       bar.className = "mac-histogram-bar";
       bar.style.width = `${Math.max(4, (Number(entry.count || 0) / maxCount) * 100)}%`;
       track.appendChild(bar);
+      row.appendChild(sourceInput);
       appendText(row, "strong", String(entry.count ?? 0));
       row.append(label, track);
       appendText(row, "small", `${entry.last_seen_ms ?? "n/a"} ms ago`);
