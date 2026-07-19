@@ -511,6 +511,57 @@ dd {
   grid-column: 1 / -1;
 }
 
+.capture-progress {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.capture-progress.hidden {
+  display: none;
+}
+
+.capture-progress-header,
+.capture-progress-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #53606f;
+  font-size: 0.9rem;
+}
+
+.capture-progress-header strong {
+  color: #18212f;
+}
+
+.capture-progress-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe7ef;
+}
+
+.capture-progress-bar {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: #2e7d5b;
+  transition: width 180ms ease;
+}
+
+.capture-progress.stalled .capture-progress-bar {
+  background: #c77d24;
+}
+
+.capture-progress.complete .capture-progress-bar {
+  background: #4361aa;
+}
+
 .mac-histogram {
   display: grid;
   gap: 10px;

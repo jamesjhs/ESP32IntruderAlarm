@@ -106,6 +106,16 @@
               <button id="stop-node-capture" type="button">Stop Capture</button>
               <button id="refresh-captures" type="button">Refresh Captures</button>
             </div>
+            <div id="node-capture-progress" class="capture-progress hidden" aria-live="polite">
+              <div class="capture-progress-header">
+                <strong id="node-capture-progress-title">Capture idle</strong>
+                <span id="node-capture-progress-time">0s remaining</span>
+              </div>
+              <div class="capture-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="node-capture-progress-bar" class="capture-progress-bar"></div>
+              </div>
+              <div id="node-capture-progress-detail" class="capture-progress-detail">No active capture.</div>
+            </div>
             <p id="node-capture-message" class="message"></p>
             <div id="captures-list" class="records"></div>
           </article>

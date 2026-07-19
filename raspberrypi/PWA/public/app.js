@@ -57,6 +57,12 @@ const nodeCalibrationPanelEl = document.querySelector("#node-calibration-panel")
 const nodeCapturePanelEl = document.querySelector("#node-capture-panel");
 const nodeCaptureFormEl = document.querySelector("#node-capture-form");
 const nodeCaptureMessageEl = document.querySelector("#node-capture-message");
+const nodeCaptureProgressEl = document.querySelector("#node-capture-progress");
+const nodeCaptureProgressTitleEl = document.querySelector("#node-capture-progress-title");
+const nodeCaptureProgressTimeEl = document.querySelector("#node-capture-progress-time");
+const nodeCaptureProgressTrackEl = document.querySelector(".capture-progress-track");
+const nodeCaptureProgressBarEl = document.querySelector("#node-capture-progress-bar");
+const nodeCaptureProgressDetailEl = document.querySelector("#node-capture-progress-detail");
 const capturesListEl = document.querySelector("#captures-list");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
 const historyFromEl = document.querySelector("#history-from-hours");
@@ -208,6 +214,8 @@ let selectedNodeRole = "csi_receiver";
 let movementHistory = { range: { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0, availableHours: 0 }, samples: [] };
 let movementTrigger = { threshold: 3, enabled: true };
 let historyWindow = { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0 };
+let nodeStatusPollInFlight = false;
+let captureProgressState = { captureId: "", records: null, changedAt: 0 };
 
 /** True while a node friendly-name input owns focus and must not be re-rendered. */
 function isEditingNodeName() {
@@ -793,6 +801,50 @@ function formatBytes(value) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function renderCaptureProgress(status) {
+  const capture = status?.capture;
+  const captureId = String(capture?.capture_id || "");
+  if (selectedNodeRole !== "csi_receiver" || !captureId) {
+    nodeCaptureProgressEl.classList.add("hidden");
+    captureProgressState = { captureId: "", records: null, changedAt: 0, active: false };
+    return;
+  }
+
+  const active = Boolean(capture?.active);
+  const records = Number(capture?.records || 0);
+  const drops = Number(capture?.drops || 0);
+  const durationMs = Math.max(0, Number(capture?.duration_s || 0) * 1000);
+  const remainingMs = Math.max(0, Number(capture?.remaining_ms || 0));
+  const elapsedMs = durationMs > 0 ? Math.min(durationMs, Math.max(0, durationMs - remainingMs)) : 0;
+  const progress = durationMs > 0 ? Math.round((elapsedMs / durationMs) * 100) : active ? 5 : 100;
+  const now = Date.now();
+
+  if (captureProgressState.captureId !== captureId) {
+    captureProgressState = { captureId, records, changedAt: now, active };
+  } else if (captureProgressState.records !== records) {
+    captureProgressState.records = records;
+    captureProgressState.changedAt = now;
+  }
+
+  const stalled = active && now - captureProgressState.changedAt > 5000;
+  const completed = !active;
+  nodeCaptureProgressEl.classList.remove("hidden", "stalled", "complete");
+  nodeCaptureProgressEl.classList.toggle("stalled", stalled);
+  nodeCaptureProgressEl.classList.toggle("complete", completed);
+  nodeCaptureProgressTitleEl.textContent = stalled ? "Capture may be stalled" : active ? "Capture running" : "Capture complete";
+  nodeCaptureProgressTimeEl.textContent = active ? `${Math.ceil(remainingMs / 1000)}s remaining` : "Complete";
+  nodeCaptureProgressBarEl.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+  nodeCaptureProgressTrackEl.setAttribute("aria-valuenow", String(Math.min(100, Math.max(0, progress))));
+  nodeCaptureProgressDetailEl.textContent = stalled
+    ? `${records} records, ${drops} drops. No new records for ${Math.round((now - captureProgressState.changedAt) / 1000)}s.`
+    : `${records} records, ${drops} drops.`;
+
+  if (captureProgressState.active && !active) {
+    refreshCaptures().catch(() => undefined);
+  }
+  captureProgressState.active = active;
+}
+
 function renderCaptures(captures) {
   const selected = captures.filter((capture) => Number(capture.device_id) === Number(selectedNodeDeviceId));
   if (!selected.length) {
@@ -992,6 +1044,7 @@ function renderNodeStatus(status) {
   if (selectedNodeRole === "csi_receiver") {
     renderMacHistogram(status);
     renderSourceMacDiagnostics(status);
+    renderCaptureProgress(status);
   }
 }
 
@@ -1123,6 +1176,18 @@ async function refreshSelectedNodeStatus() {
   renderNodeStatus(status);
 }
 
+async function pollSelectedNodeStatus() {
+  if (nodeSettingsModalEl.classList.contains("hidden") || selectedNodeDeviceId === null || nodeStatusPollInFlight) return;
+  nodeStatusPollInFlight = true;
+  try {
+    await refreshSelectedNodeStatus();
+  } catch {
+    // The main modal action paths surface errors; this background poll stays quiet.
+  } finally {
+    nodeStatusPollInFlight = false;
+  }
+}
+
 /** Refreshes only the selected node's persisted calibration panel. */
 async function refreshSelectedNodeCalibration() {
   if (selectedNodeDeviceId === null) return null;
@@ -1143,6 +1208,8 @@ async function openNodeSettings(deviceId) {
   nodeSettingsTitleEl.textContent = liveNode ? `${liveNode.name} Settings` : `Node ${selectedNodeDeviceId} Settings`;
   setNodeSettingsRole(selectedNodeRole);
   setCalibrationControlsDisabled(selectedNodeRole === "csi_sender");
+  captureProgressState = { captureId: "", records: null, changedAt: 0, active: false };
+  nodeCaptureProgressEl.classList.add("hidden");
   if (selectedNodeRole === "csi_sender" && nodeConfigFormEl.elements.sta_mac) {
     nodeConfigFormEl.elements.sta_mac.value = liveNode?.payload?.sta_mac ?? "";
   }
@@ -1191,6 +1258,8 @@ function closeNodeSettings() {
   nodeConfigFormEl.reset();
   nodeCalibrationFormEl.reset();
   nodeCaptureFormEl.reset();
+  captureProgressState = { captureId: "", records: null, changedAt: 0, active: false };
+  nodeCaptureProgressEl.classList.add("hidden");
   capturesListEl.replaceChildren();
   nodeCaptureMessageEl.textContent = "";
   setNodeSettingsMessage("");
@@ -1992,5 +2061,6 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 setInterval(refreshStatus, 5000);
+setInterval(pollSelectedNodeStatus, 1000);
 setInterval(() => refreshAdmin().catch(() => undefined), 30000);
 setInterval(() => refreshMovementHistory().catch(() => undefined), 30000);
