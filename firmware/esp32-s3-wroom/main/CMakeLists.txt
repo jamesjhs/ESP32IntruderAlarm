@@ -6,6 +6,7 @@ idf_component_register(
     REQUIRES
         esp_event
         esp_driver_gpio
+        esp_driver_rmt
         esp_http_server
         esp_netif
         esp_timer

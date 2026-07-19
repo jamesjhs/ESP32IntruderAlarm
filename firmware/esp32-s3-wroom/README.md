@@ -59,3 +59,6 @@ The S3 receiver exposes the same endpoints as the standard receiver. Its
 `GET /api/config` also reports `max_idle_rate_hz`, `max_boost_rate_hz`, and
 `csi_queue_len` so the Pi/PWA can show the active receiver capability without
 guessing from the board name.
+
+`POST /api/identify` uses the onboard RGB LED on GPIO 48 for this build. The
+LED cycles through the rainbow once per second for 5 seconds.

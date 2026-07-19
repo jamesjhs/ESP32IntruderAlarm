@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
+import dns from "node:dns/promises";
 import { isIP } from "node:net";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
@@ -18,6 +19,7 @@ const db = new AlarmDatabase(appConfig.databasePath, appConfig.sqlCipherKey);
 const DEFAULT_HISTORY_HOURS = 0.5;
 const MAX_HISTORY_HOURS = 24;
 const CAPTURE_ID_RE = /^[A-Za-z0-9_. -]{1,40}$/;
+const MAC_RE = /^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/;
 
 // The Python worker can be polled by browsers via /api/status and by the
 // background timer below. Cache the most recent good response briefly so the PWA
@@ -33,6 +35,17 @@ type PushSubscriptionBody = {
   };
   deviceName?: string;
   userId?: number | null;
+};
+
+type MacIdentity = {
+  mac: string;
+  friendlyName: string;
+  ip: string;
+  role: string;
+  deviceId: number | null;
+  source: string;
+  confidence: "known" | "inferred" | "observed";
+  notes: string[];
 };
 
 /**
@@ -270,6 +283,114 @@ function nodeBaseUrl(node: NodeRecord) {
     throw new Error(`node IP is unavailable or invalid: ${node.ip || "empty"}`);
   }
   return `http://${node.ip}`;
+}
+
+function normalizeMac(value: unknown) {
+  const text = String(value ?? "").trim().toUpperCase().replaceAll("-", ":");
+  return MAC_RE.test(text) ? text : "";
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> {
+  return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+}
+
+function mergeMacIdentity(target: Map<string, MacIdentity>, mac: unknown, update: Partial<MacIdentity>) {
+  const normalized = normalizeMac(mac);
+  if (!normalized) {
+    return;
+  }
+  const existing = target.get(normalized);
+  const next: MacIdentity = {
+    mac: normalized,
+    friendlyName: update.friendlyName || existing?.friendlyName || "",
+    ip: update.ip || existing?.ip || "",
+    role: update.role || existing?.role || "unknown",
+    deviceId: update.deviceId ?? existing?.deviceId ?? null,
+    source: update.source || existing?.source || "unknown",
+    confidence: update.confidence || existing?.confidence || "observed",
+    notes: [...(existing?.notes ?? []), ...(update.notes ?? [])]
+  };
+  if (existing?.confidence === "known" && update.confidence !== "known") {
+    next.friendlyName = existing.friendlyName;
+    next.role = existing.role;
+    next.deviceId = existing.deviceId;
+    next.source = existing.source;
+    next.confidence = existing.confidence;
+  }
+  target.set(normalized, next);
+}
+
+async function readArpNeighbors() {
+  try {
+    const text = await fs.readFile("/proc/net/arp", "utf8");
+    return text
+      .split(/\r?\n/)
+      .slice(1)
+      .map((line) => line.trim().split(/\s+/))
+      .filter((columns) => columns.length >= 4)
+      .map((columns) => ({ ip: columns[0], mac: normalizeMac(columns[3]) }))
+      .filter((entry) => entry.mac && entry.mac !== "00:00:00:00:00:00");
+  } catch {
+    return [];
+  }
+}
+
+async function reverseDnsName(ip: string) {
+  if (!ip || isIP(ip) === 0) {
+    return "";
+  }
+  try {
+    const names = await Promise.race([
+      dns.reverse(ip),
+      new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 250))
+    ]);
+    return names[0] || "";
+  } catch {
+    return "";
+  }
+}
+
+async function buildMacIdentities() {
+  const identities = new Map<string, MacIdentity>();
+  const nodes = db.listNodes();
+
+  for (const node of nodes) {
+    const payload = payloadRecord(node.payload);
+    const role = payload.role === "csi_sender" ? "sender" : "receiver";
+    mergeMacIdentity(identities, payload.sta_mac, {
+      friendlyName: node.name,
+      ip: node.ip,
+      role,
+      deviceId: node.deviceId,
+      source: "ESP32 telemetry",
+      confidence: "known",
+      notes: ["Station MAC reported by this ESP32 node."]
+    });
+    mergeMacIdentity(identities, payload.csi_source_mac, {
+      friendlyName: `Configured source for ${node.name}`,
+      ip: "",
+      role: "configured CSI source",
+      deviceId: node.deviceId,
+      source: "ESP32 receiver config",
+      confidence: "inferred",
+      notes: [`Configured as the CSI source MAC on ${node.name}.`]
+    });
+  }
+
+  for (const neighbor of await readArpNeighbors()) {
+    const hostname = await reverseDnsName(neighbor.ip);
+    mergeMacIdentity(identities, neighbor.mac, {
+      friendlyName: hostname || `LAN device ${neighbor.ip}`,
+      ip: neighbor.ip,
+      role: "LAN neighbor",
+      deviceId: null,
+      source: hostname ? "ARP and reverse DNS" : "ARP neighbor table",
+      confidence: "observed",
+      notes: hostname ? [`Reverse DNS name: ${hostname}`] : ["Seen in the Pi ARP neighbor table."]
+    });
+  }
+
+  return Object.fromEntries([...identities.entries()].sort(([a], [b]) => a.localeCompare(b)));
 }
 
 /**
@@ -545,6 +666,7 @@ export function buildServer() {
     vapid: db.getVapidSettings({ includePrivateKey: true }),
     pushSubscriptions: db.listPushSubscriptions(),
     nodes: db.listNodes(),
+    macIdentities: await buildMacIdentities(),
     security: db.getSecuritySettings(),
     events: db.recentEvents(25),
     auditLog: db.auditLog(25)

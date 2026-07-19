@@ -8,6 +8,9 @@
 
 #include "cJSON.h"
 #include "driver/gpio.h"
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+#include "driver/rmt_tx.h"
+#endif
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -98,7 +101,15 @@
 #define MOVEMENT_LED_GPIO GPIO_NUM_2
 #define MOVEMENT_LED_ON_LEVEL 1
 #define MOVEMENT_LED_OFF_LEVEL 0
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+#define S3_RGB_LED_GPIO GPIO_NUM_48
+#define S3_RGB_RMT_RESOLUTION_HZ 10000000
+#define S3_RGB_BRIGHTNESS 96
+#define IDENTIFY_DURATION_MS 5000
+#define IDENTIFY_RAINBOW_STEP_MS 20
+#else
 #define IDENTIFY_DURATION_MS 10000
+#endif
 #define IDENTIFY_BLINK_MS 120
 #define LOG_LINE_COUNT 100
 #define LOG_LINE_LEN 192
@@ -277,6 +288,10 @@ static volatile bool identify_active;
 static volatile int64_t identify_until_us;
 static TaskHandle_t identify_task_handle;
 static capture_status_t g_capture;
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+static rmt_channel_handle_t s3_rgb_channel;
+static rmt_encoder_handle_t s3_rgb_encoder;
+#endif
 static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
 static vprintf_like_t original_log_vprintf;
 static char log_lines[LOG_LINE_COUNT][LOG_LINE_LEN];
@@ -487,6 +502,53 @@ static const char *sense_state_name(sense_state_t state)
 
 static void movement_led_init(void)
 {
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+    rmt_tx_channel_config_t tx_config = {
+        .gpio_num = S3_RGB_LED_GPIO,
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = S3_RGB_RMT_RESOLUTION_HZ,
+        .mem_block_symbols = 64,
+        .trans_queue_depth = 4,
+        .flags.invert_out = false,
+        .flags.with_dma = false,
+        .flags.allow_pd = false,
+        .flags.init_level = false,
+    };
+    esp_err_t err = rmt_new_tx_channel(&tx_config, &s3_rgb_channel);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "S3 RGB LED RMT channel init failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    rmt_bytes_encoder_config_t encoder_config = {
+        .bit0 = {
+            .level0 = 1,
+            .duration0 = 4,
+            .level1 = 0,
+            .duration1 = 8,
+        },
+        .bit1 = {
+            .level0 = 1,
+            .duration0 = 8,
+            .level1 = 0,
+            .duration1 = 4,
+        },
+        .flags.msb_first = true,
+    };
+    err = rmt_new_bytes_encoder(&encoder_config, &s3_rgb_encoder);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "S3 RGB LED encoder init failed: %s", esp_err_to_name(err));
+        s3_rgb_channel = NULL;
+        return;
+    }
+    err = rmt_enable(s3_rgb_channel);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "S3 RGB LED RMT enable failed: %s", esp_err_to_name(err));
+        s3_rgb_channel = NULL;
+        s3_rgb_encoder = NULL;
+        return;
+    }
+#else
     gpio_config_t io_conf = {
         .pin_bit_mask = 1ULL << MOVEMENT_LED_GPIO,
         .mode = GPIO_MODE_OUTPUT,
@@ -496,31 +558,114 @@ static void movement_led_init(void)
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
     ESP_ERROR_CHECK(gpio_set_level(MOVEMENT_LED_GPIO, MOVEMENT_LED_OFF_LEVEL));
+#endif
 }
+
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+static void s3_rgb_led_set(uint8_t red, uint8_t green, uint8_t blue)
+{
+    if (s3_rgb_channel == NULL || s3_rgb_encoder == NULL) {
+        return;
+    }
+    uint8_t grb[3] = {green, red, blue};
+    rmt_transmit_config_t tx_config = {
+        .loop_count = 0,
+        .flags.eot_level = 0,
+        .flags.queue_nonblocking = 0,
+    };
+    ESP_ERROR_CHECK_WITHOUT_ABORT(rmt_transmit(s3_rgb_channel, s3_rgb_encoder, grb, sizeof(grb), &tx_config));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(rmt_tx_wait_all_done(s3_rgb_channel, 20));
+}
+
+static void hsv_to_rgb(uint16_t hue, uint8_t value, uint8_t *red, uint8_t *green, uint8_t *blue)
+{
+    hue %= 360;
+    uint8_t region = hue / 60;
+    uint16_t remainder = (hue % 60) * 255 / 60;
+    uint8_t q = (uint8_t)((value * (255 - remainder)) / 255);
+    uint8_t t = (uint8_t)((value * remainder) / 255);
+
+    switch (region) {
+    case 0:
+        *red = value;
+        *green = t;
+        *blue = 0;
+        break;
+    case 1:
+        *red = q;
+        *green = value;
+        *blue = 0;
+        break;
+    case 2:
+        *red = 0;
+        *green = value;
+        *blue = t;
+        break;
+    case 3:
+        *red = 0;
+        *green = q;
+        *blue = value;
+        break;
+    case 4:
+        *red = t;
+        *green = 0;
+        *blue = value;
+        break;
+    default:
+        *red = value;
+        *green = 0;
+        *blue = q;
+        break;
+    }
+}
+#endif
 
 static void movement_led_set(bool movement_detected)
 {
     if (identify_active) {
         return;
     }
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+    (void)movement_detected;
+    s3_rgb_led_set(0, 0, 0);
+#else
     gpio_set_level(MOVEMENT_LED_GPIO, movement_detected ? MOVEMENT_LED_ON_LEVEL : MOVEMENT_LED_OFF_LEVEL);
+#endif
 }
 
 static void identify_led_task(void *arg)
 {
     (void)arg;
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+    int64_t started_us = esp_timer_get_time();
+    while (esp_timer_get_time() < identify_until_us) {
+        int64_t elapsed_ms = (esp_timer_get_time() - started_us) / 1000LL;
+        uint16_t hue = (uint16_t)(((elapsed_ms % 1000LL) * 360LL) / 1000LL);
+        uint8_t red = 0;
+        uint8_t green = 0;
+        uint8_t blue = 0;
+        hsv_to_rgb(hue, S3_RGB_BRIGHTNESS, &red, &green, &blue);
+        s3_rgb_led_set(red, green, blue);
+        vTaskDelay(pdMS_TO_TICKS(IDENTIFY_RAINBOW_STEP_MS));
+    }
+#else
     bool on = false;
     while (esp_timer_get_time() < identify_until_us) {
         on = !on;
         gpio_set_level(MOVEMENT_LED_GPIO, on ? MOVEMENT_LED_ON_LEVEL : MOVEMENT_LED_OFF_LEVEL);
         vTaskDelay(pdMS_TO_TICKS(IDENTIFY_BLINK_MS));
     }
+#endif
 
     xSemaphoreTake(state_lock, portMAX_DELAY);
     bool movement_detected = g_status.movement_detected;
     xSemaphoreGive(state_lock);
     identify_active = false;
+#ifdef ESP32_INTRUDER_S3_WROOM_1U
+    s3_rgb_led_set(0, 0, 0);
+#else
     gpio_set_level(MOVEMENT_LED_GPIO, movement_detected ? MOVEMENT_LED_ON_LEVEL : MOVEMENT_LED_OFF_LEVEL);
+#endif
     identify_task_handle = NULL;
     vTaskDelete(NULL);
 }
@@ -2065,10 +2210,12 @@ static cJSON *status_to_json(void)
     uint32_t source_accepted_after_gates = csi_source_accepted_after_gates_samples;
     int64_t source_last_seen_us = csi_source_last_seen_us;
     int64_t source_last_accepted_us = csi_source_last_accepted_us;
+    uint8_t sta_mac[6];
     memcpy(last_mac, csi_last_mac, sizeof(last_mac));
     memcpy(last_filtered_mac, csi_last_filtered_mac, sizeof(last_filtered_mac));
     memcpy(last_accepted_mac, csi_last_accepted_mac, sizeof(last_accepted_mac));
     memcpy(configured_source_mac, csi_configured_source_mac, sizeof(configured_source_mac));
+    esp_read_mac(sta_mac, ESP_MAC_WIFI_STA);
     csi_mac_histogram_entry_t mac_histogram[CSI_MAC_HISTOGRAM_LEN];
     portENTER_CRITICAL(&csi_mac_histogram_lock);
     memcpy(mac_histogram, csi_mac_histogram, sizeof(mac_histogram));
@@ -2097,6 +2244,9 @@ static cJSON *status_to_json(void)
     cJSON_AddStringToObject(root, "board_variant", ESP32_INTRUDER_BOARD_VARIANT);
     cJSON_AddStringToObject(root, "hardware_profile", ESP32_INTRUDER_HARDWARE_PROFILE);
     cJSON_AddStringToObject(root, "ip", status.ip);
+    char sta_mac_text[18] = {0};
+    format_mac(sta_mac, sta_mac_text, sizeof(sta_mac_text));
+    cJSON_AddStringToObject(root, "sta_mac", sta_mac_text);
     cJSON_AddNumberToObject(root, "uptime_ms", (esp_timer_get_time() - status.boot_us) / 1000LL);
     cJSON_AddNumberToObject(root, "sample_rate_hz", status.sample_rate_hz);
     cJSON_AddNumberToObject(root, "accepted_csi_rate_hz", status.accepted_csi_rate_hz);
@@ -3264,7 +3414,9 @@ static esp_err_t identify_post_handler(httpd_req_t *req)
 {
     start_identify_blink();
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"ok\":true,\"identifying\":true,\"duration_ms\":10000}");
+    char body[64];
+    snprintf(body, sizeof(body), "{\"ok\":true,\"identifying\":true,\"duration_ms\":%u}", (unsigned)IDENTIFY_DURATION_MS);
+    return httpd_resp_sendstr(req, body);
 }
 
 static esp_err_t calibration_delete_handler(httpd_req_t *req)

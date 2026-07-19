@@ -197,8 +197,9 @@ values for inspection or manual repair:
 - `POST /api/config` accepts partial JSON config updates from the Pi dashboard
   or the local diagnostic page. Changes are saved to NVS.
 - `POST /api/calibrate` starts a 10 second stillness calibration.
-- `POST /api/identify` rapidly blinks the node's blue LED for 10 seconds, then
-  restores the normal movement LED state.
+- `POST /api/identify` identifies the node visually. Standard ESP32 receiver
+  builds rapidly blink the blue LED for 10 seconds; ESP32-S3-WROOM-1U builds
+  cycle the onboard RGB LED through the rainbow once per second for 5 seconds.
 - `GET /api/capture/status` returns the current bounded CSI capture state.
 - `POST /api/capture/start` starts an on-demand capture. The Pi dashboard sends
   `duration_seconds`, defaulting to 30 seconds, `mode` as `features` or

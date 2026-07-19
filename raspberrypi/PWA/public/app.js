@@ -188,7 +188,7 @@ const NODE_CALIBRATION_HELP = {
 const NODE_ACTION_HELP = {
   refreshNodeStatus: "Fetch the latest live status directly from this ESP32 node through the Pi.",
   calibrateNode: "Ask the ESP32 to record a fresh quiet baseline. Keep the area still while it runs.",
-  identifyNode: "Blink this ESP32 node's blue LED rapidly for 10 seconds.",
+  identifyNode: "Ask this ESP32 node to run its board-specific visual identify pattern.",
   deleteNodeCalibration: "Clear the node's saved baseline so it can learn a new one.",
   startNodeCapture: "Start a bounded CSI capture session and stream records to the Pi.",
   stopNodeCapture: "Stop the current CSI capture session early.",
@@ -443,6 +443,17 @@ function knownMacDetails() {
     }
   };
 
+  for (const [mac, detail] of Object.entries(currentAdmin?.macIdentities || {})) {
+    upsert(mac, {
+      name: detail.friendlyName,
+      ip: detail.ip,
+      role: detail.role,
+      match: detail.confidence === "known" ? "station" : detail.confidence,
+      source: detail.source,
+      notes: detail.notes || []
+    });
+  }
+
   const addNode = (node, deviceIdKey) => {
     const deviceId = Number(node?.[deviceIdKey]);
     const registryNode = nodeRecordFor(deviceId);
@@ -451,8 +462,8 @@ function knownMacDetails() {
     const ip = String(node?.ip || registryNode?.ip || "").trim();
     const role = payload.role === "csi_sender" ? "sender" : "node";
 
-    upsert(payload.sta_mac, { name, ip, role, match: "station" });
-    upsert(payload.csi_source_mac, { name: `Configured for ${name}`, ip: "", role: "source", match: "configured" });
+    upsert(payload.sta_mac, { name, ip, role, match: "station", source: "live telemetry", notes: ["Station MAC reported by this ESP32 node."] });
+    upsert(payload.csi_source_mac, { name: `Configured for ${name}`, ip: "", role: "source", match: "configured", source: "receiver config", notes: [`Configured as the CSI source on ${name}.`] });
   };
 
   for (const node of currentAdmin?.nodes ?? []) addNode(node, "deviceId");
@@ -562,7 +573,7 @@ function renderNodes(nodes) {
         identify.className = "node-identify-button";
         identify.dataset.identifyDeviceId = String(node.device_id);
         identify.textContent = "Identify";
-        identify.title = "Blink this ESP32 node's blue LED rapidly for 10 seconds.";
+        identify.title = "Run this ESP32 node's visual identify pattern.";
         item.appendChild(identify);
       }
 
@@ -831,8 +842,15 @@ function renderMacHistogram(status) {
       appendText(label, "span", String(entry.mac));
       const detail = macDetails.get(normalizeMac(entry.mac));
       if (detail) {
-        appendText(label, "small", [detail.name, detail.ip].filter(Boolean).join(" · "), "mac-histogram-device");
-        row.title = detail.ip ? `${detail.name} (${detail.ip})` : detail.name;
+        const detailParts = [
+          detail.role,
+          detail.name,
+          detail.ip,
+          detail.source,
+          detail.match && detail.match !== "station" ? detail.match : ""
+        ].filter(Boolean);
+        appendText(label, "small", detailParts.join(" · "), "mac-histogram-device");
+        row.title = [...detailParts, ...(detail.notes || [])].filter(Boolean).join("\n");
       }
       const track = document.createElement("div");
       track.className = "mac-histogram-track";
