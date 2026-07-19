@@ -261,6 +261,26 @@ async function fetchAndProcessWorkerStatus() {
   return status;
 }
 
+async function refreshWorkerStatusCacheOnly() {
+  if (Date.now() - lastWorkerStatusAt < 5000 && lastWorkerStatus) {
+    return lastWorkerStatus;
+  }
+  try {
+    const response = await fetch(`${appConfig.workerInternalUrl}/internal/status`, {
+      headers: { accept: "application/json" }
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!response.ok || !contentType.includes("application/json")) {
+      return lastWorkerStatus;
+    }
+    lastWorkerStatus = await response.json();
+    lastWorkerStatusAt = Date.now();
+  } catch {
+    return lastWorkerStatus;
+  }
+  return lastWorkerStatus;
+}
+
 /**
  * Finds the PWA database record for a logical ESP32 `device_id`.
  *
@@ -351,33 +371,44 @@ async function reverseDnsName(ip: string) {
 }
 
 async function buildMacIdentities() {
+  const workerStatus = await refreshWorkerStatusCacheOnly();
   const identities = new Map<string, MacIdentity>();
   const nodes = db.listNodes();
 
-  for (const node of nodes) {
+  const addKnownNode = (node: { deviceId?: unknown; device_id?: unknown; name?: unknown; ip?: unknown; payload?: unknown }, source: string) => {
     const payload = payloadRecord(node.payload);
+    const deviceId = Number(node.deviceId ?? node.device_id);
     const role = payload.role === "csi_sender" ? "sender" : "receiver";
+    const name = String(node.name ?? (Number.isFinite(deviceId) ? `Movement${deviceId.toString(16).padStart(2, "0")}` : "ESP32 node"));
+    const ip = String(node.ip ?? "");
     mergeMacIdentity(identities, payload.sta_mac, {
-      friendlyName: node.name,
-      ip: node.ip,
+      friendlyName: name,
+      ip,
       role,
-      deviceId: node.deviceId,
-      source: "ESP32 telemetry",
+      deviceId: Number.isFinite(deviceId) ? deviceId : null,
+      source,
       confidence: "known",
       notes: ["Station MAC reported by this ESP32 node."]
     });
     mergeMacIdentity(identities, payload.csi_source_mac, {
-      friendlyName: `Configured source for ${node.name}`,
+      friendlyName: `Configured source for ${name}`,
       ip: "",
       role: "configured CSI source",
-      deviceId: node.deviceId,
+      deviceId: Number.isFinite(deviceId) ? deviceId : null,
       source: "ESP32 receiver config",
       confidence: "inferred",
-      notes: [`Configured as the CSI source MAC on ${node.name}.`]
+      notes: [`Configured as the CSI source MAC on ${name}.`]
     });
+  };
+
+  for (const node of nodes) {
+    addKnownNode(node, "ESP32 database telemetry");
+  }
+  for (const node of workerStatus?.nodes ?? []) {
+    addKnownNode(node, "ESP32 live worker telemetry");
   }
 
-  for (const neighbor of Object.values((lastWorkerStatus?.mac_neighbors ?? {}) as Record<string, any>)) {
+  for (const neighbor of Object.values((workerStatus?.mac_neighbors ?? {}) as Record<string, any>)) {
     mergeMacIdentity(identities, neighbor?.mac, {
       friendlyName: neighbor?.ip ? `LAN device ${neighbor.ip}` : "LAN device",
       ip: String(neighbor?.ip ?? ""),

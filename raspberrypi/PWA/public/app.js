@@ -1091,6 +1091,9 @@ function nodeCalibrationPayload() {
 /** Refreshes only the selected node's live status panel. */
 async function refreshSelectedNodeStatus() {
   if (selectedNodeDeviceId === null) return;
+  if (selectedNodeRole === "csi_receiver") {
+    await refreshAdmin().catch(() => undefined);
+  }
   const status = await readJson(`/api/nodes/${selectedNodeDeviceId}/status`);
   renderNodeStatus(status);
 }

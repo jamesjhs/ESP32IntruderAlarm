@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import socket
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -62,9 +63,10 @@ def normalize_mac(value: object) -> str:
 
 async def ip_neigh_mac_map() -> dict[str, dict[str, str]]:
     """Use `ip neigh` to map known neighbor MAC addresses to IP addresses."""
+    ip_command = shutil.which("ip") or next((candidate for candidate in ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip") if shutil.which(candidate)), "ip")
     try:
         process = await asyncio.create_subprocess_exec(
-            "ip",
+            ip_command,
             "neigh",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
