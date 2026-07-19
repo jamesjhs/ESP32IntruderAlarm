@@ -451,6 +451,16 @@ async function buildMacIdentities() {
   return Object.fromEntries([...identities.entries()].sort(([a], [b]) => a.localeCompare(b)));
 }
 
+function currentMacDiscoveryStatus() {
+  return lastWorkerStatus?.mac_discovery ?? {
+    records: {},
+    reported_macs: [],
+    last_scan_epoch: 0,
+    last_scan_age_s: null,
+    scan_running: false
+  };
+}
+
 /**
  * Proxies a JSON request to a selected ESP32 node and normalizes the response.
  *
@@ -642,6 +652,21 @@ export function buildServer() {
     captures: await listCaptures()
   }));
 
+  server.post("/api/nmap/scan", async (request, reply) => {
+    const response = await fetch(`${appConfig.workerInternalUrl}/internal/nmap/scan`, {
+      method: "POST",
+      headers: { accept: "application/json" }
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!response.ok || !contentType.includes("application/json")) {
+      reply.code(502);
+      return { ok: false, error: "worker nmap scan request failed", worker_status: response.status };
+    }
+    const result = await response.json();
+    await refreshWorkerStatusCacheOnly();
+    return result;
+  });
+
   server.get<{ Params: { captureId: string } }>("/api/captures/:captureId/download", async (request, reply) => {
     const captureId = safeCaptureId(decodeURIComponent(request.params.captureId));
     const filePath = path.join(appConfig.captureDir, `${captureId}.ndjson`);
@@ -725,6 +750,7 @@ export function buildServer() {
     pushSubscriptions: db.listPushSubscriptions(),
     nodes: db.listNodes(),
     macIdentities: await buildMacIdentities(),
+    macDiscovery: currentMacDiscoveryStatus(),
     security: db.getSecuritySettings(),
     events: db.recentEvents(25),
     auditLog: db.auditLog(25)

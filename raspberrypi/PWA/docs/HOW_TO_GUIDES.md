@@ -48,6 +48,10 @@ The histogram rows also show Pi-side identity enrichment when available:
 friendly ESP32 node names first, then nmap-derived IP/hostname/vendor details,
 then any `ip neigh` fallback.
 
+Use **Run nmap Scan** in the receiver Settings modal to request an immediate
+Pi-side scan. The badge beside the histogram shows `nmap running`, `nmap never`,
+or the time since the last scan.
+
 For ESP32-S3-WROOM-1U receivers, flash `firmware/esp32-s3-wroom` instead of
 `firmware/esp32-csi-node`. In the receiver status modal, confirm the board
 fields show `ESP32-S3-WROOM-1U` and `s3-enhanced` before tuning higher S3-only

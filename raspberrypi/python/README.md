@@ -65,12 +65,14 @@ defaults.
 | `POST` | `/capture` | ESP32 bounded CSI capture chunk ingest. Writes `.ndjson` data and `.json` metadata. |
 | `GET` | `/internal/status` | Live node state for the PWA service. |
 | `GET` | `/internal/nodes/{device_id}` | One node snapshot. |
+| `POST` | `/internal/nmap/scan` | Start a manual nmap discovery scan if one is not already running. |
 
 `/internal/status` includes:
 
 - `mac_neighbors`: cheap `ip neigh` results when available.
 - `mac_discovery`: intermittent `nmap` results keyed by MAC address, including
-  IP, optional host name, optional vendor, scan source, and scan timing state.
+  IP, optional host name, optional vendor, scan source, `scan_running`, and
+  `last_scan_age_s`.
 
 ## nmap Discovery
 

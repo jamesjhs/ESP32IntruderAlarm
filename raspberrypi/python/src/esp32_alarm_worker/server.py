@@ -193,10 +193,12 @@ class MacDiscovery:
         self._scan_task: asyncio.Task[None] | None = None
 
     def status(self) -> dict[str, Any]:
+        now = asyncio.get_running_loop().time()
         return {
             "records": self._records,
             "reported_macs": sorted(self._reported_macs),
             "last_scan_epoch": self._last_scan_epoch,
+            "last_scan_age_s": round(now - self._last_scan_epoch, 3) if self._last_scan_epoch > 0 else None,
             "scan_running": self._scan_task is not None and not self._scan_task.done(),
         }
 
@@ -220,6 +222,17 @@ class MacDiscovery:
         if not target:
             return
         self._scan_task = asyncio.create_task(self._scan(target))
+
+    def force_scan(self, config: WorkerConfig, store: NodeStore) -> dict[str, Any]:
+        if not config.nmap_enabled:
+            return {"started": False, "reason": "nmap discovery is disabled", "target": ""}
+        if self._scan_task is not None and not self._scan_task.done():
+            return {"started": False, "reason": "scan already running", "target": ""}
+        target = derive_scan_target(config, store)
+        if not target:
+            return {"started": False, "reason": "no scan target available", "target": ""}
+        self._scan_task = asyncio.create_task(self._scan(target))
+        return {"started": True, "reason": "manual", "target": target}
 
     async def _scan(self, target: str) -> None:
         self._last_scan_epoch = asyncio.get_running_loop().time()
@@ -380,6 +393,11 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
             return web.json_response({"ok": False, "error": "node not found"}, status=404)
         return web.json_response({"ok": True, "node": snapshot.to_dict()})
 
+    async def manual_nmap_scan(_: web.Request) -> web.Response:
+        """Start a manual nmap discovery scan when one is not already running."""
+        result = discovery.force_scan(config, store)
+        return web.json_response({"ok": True, **result, "mac_discovery": discovery.status()})
+
     async def start_background(app_: web.Application) -> None:
         """Start optional background tasks after aiohttp is ready."""
         app_["udp_probe_task"] = asyncio.create_task(udp_probe_loop(config))
@@ -401,6 +419,7 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
     app.router.add_post(config.capture_path, receive_capture)
     app.router.add_get("/internal/status", status)
     app.router.add_get("/internal/nodes/{device_id:\\d+}", node)
+    app.router.add_post("/internal/nmap/scan", manual_nmap_scan)
     app.on_startup.append(start_background)
     app.on_cleanup.append(stop_background)
     return app

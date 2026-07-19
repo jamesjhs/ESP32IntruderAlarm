@@ -51,6 +51,7 @@ const nodeConfigFormEl = document.querySelector("#node-config-form");
 const nodeMacHistogramPanelEl = document.querySelector("#node-mac-histogram-panel");
 const nodeMacHistogramEl = document.querySelector("#node-mac-histogram");
 const nodeSourceMacDiagnosticsEl = document.querySelector("#node-source-mac-diagnostics");
+const nmapScanStatusEl = document.querySelector("#nmap-scan-status");
 const nodeCalibrationFormEl = document.querySelector("#node-calibration-form");
 const nodeCalibrationPanelEl = document.querySelector("#node-calibration-panel");
 const nodeCapturePanelEl = document.querySelector("#node-capture-panel");
@@ -193,6 +194,7 @@ const NODE_ACTION_HELP = {
   startNodeCapture: "Start a bounded CSI capture session and stream records to the Pi.",
   stopNodeCapture: "Stop the current CSI capture session early.",
   refreshCaptures: "Refresh the Pi-side list of downloadable CSI capture files.",
+  runNmapScan: "Ask the Pi worker to run an immediate nmap scan for MAC/IP enrichment.",
   saveNodeConfig: "Send these configuration values to the ESP32 node's /api/config endpoint.",
   saveNodeCalibration: "Persist these calibration baseline values to the ESP32 node's NVS.",
   reloadNodeCalibration: "Reload the calibration baseline currently saved on the ESP32 node."
@@ -281,6 +283,27 @@ function formatLastSeenAge(seconds) {
   if (age < 3600) return `${Math.round(age / 60)}m ago`;
   if (age < 86400) return `${Math.round(age / 3600)}h ago`;
   return `${Math.round(age / 86400)}d ago`;
+}
+
+function formatDuration(seconds) {
+  const value = asNumber(seconds);
+  if (value === null) return "never";
+  if (value < 60) return `${Math.round(value)}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  if (value < 86400) return `${Math.round(value / 3600)}h`;
+  return `${Math.round(value / 86400)}d`;
+}
+
+function updateNmapScanStatus() {
+  const discovery = currentAdmin?.macDiscovery;
+  if (!nmapScanStatusEl) return;
+  if (discovery?.scan_running) {
+    nmapScanStatusEl.textContent = "nmap running";
+  } else if (discovery?.last_scan_age_s === null || discovery?.last_scan_age_s === undefined) {
+    nmapScanStatusEl.textContent = "nmap never";
+  } else {
+    nmapScanStatusEl.textContent = `nmap ${formatDuration(discovery.last_scan_age_s)} ago`;
+  }
 }
 
 /** Truncates form decimals before sending them to the ESP32 firmware. */
@@ -730,6 +753,7 @@ function attachNodeSettingsHelp() {
     ['#node-capture-form button[type="submit"]', NODE_ACTION_HELP.startNodeCapture],
     ["#stop-node-capture", NODE_ACTION_HELP.stopNodeCapture],
     ["#refresh-captures", NODE_ACTION_HELP.refreshCaptures],
+    ["#run-nmap-scan", NODE_ACTION_HELP.runNmapScan],
     ['#node-config-form button[type="submit"]', NODE_ACTION_HELP.saveNodeConfig],
     ['#node-calibration-form button[type="submit"]', NODE_ACTION_HELP.saveNodeCalibration],
     ["#reload-node-calibration", NODE_ACTION_HELP.reloadNodeCalibration]
@@ -811,6 +835,7 @@ async function refreshCaptures() {
 }
 
 function renderMacHistogram(status) {
+  updateNmapScanStatus();
   const histogram = Array.isArray(status?.csi_mac_histogram) ? status.csi_mac_histogram : [];
   const entries = histogram
     .filter((entry) => entry?.mac)
@@ -1589,6 +1614,7 @@ async function refreshAdmin() {
   renderSecurity(currentAdmin.security);
   renderRecords(eventsListEl, currentAdmin.events, "No events yet.");
   renderRecords(auditListEl, currentAdmin.auditLog, "No audit records yet.");
+  updateNmapScanStatus();
 }
 
 /** Converts a VAPID public key from URL-safe base64 into PushManager bytes. */
@@ -1805,6 +1831,20 @@ document.querySelector("#refresh-captures").addEventListener("click", async () =
   await runNodeAction(async () => {
     await refreshCaptures();
   }, "Capture list refreshed.");
+});
+
+document.querySelector("#run-nmap-scan").addEventListener("click", async () => {
+  if (selectedNodeRole === "csi_sender") return;
+  await runNodeAction(async () => {
+    const result = await postJson("/api/nmap/scan");
+    await refreshAdmin();
+    setTimeout(() => {
+      refreshAdmin()
+        .then(() => selectedNodeDeviceId === null ? undefined : refreshSelectedNodeStatus())
+        .catch(() => undefined);
+    }, 4000);
+    return result;
+  }, (result) => result.started ? `nmap scan started for ${result.target}.` : `nmap scan not started: ${result.reason}.`);
 });
 
 nodeConfigFormEl.addEventListener("submit", async (event) => {

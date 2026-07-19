@@ -98,6 +98,7 @@ npm start
 | `POST` | `/api/admin/security` | Save security-setting flags. |
 | `POST` | `/api/admin/backup` | Checkpoint and copy the SQLite database to the backup directory. |
 | `GET` | `/api/captures` | List Pi-side bounded CSI capture files. |
+| `POST` | `/api/nmap/scan` | Ask the Python worker to start a manual nmap discovery scan. |
 | `GET` | `/api/captures/:captureId/download` | Download capture `.ndjson` data. |
 | `GET` | `/api/captures/:captureId/metadata` | Download capture metadata JSON. |
 | `GET` | `/api/nodes/:deviceId/status` | Proxy live status from a selected ESP32 node. |

@@ -48,7 +48,9 @@ The CSI MAC histogram also consumes a Pi-side MAC identity map from
 then uses the Python worker's intermittent `nmap` discovery cache to show IP,
 hostname, and vendor detail for other LAN devices. The worker's `ip neigh` data
 is retained as a cheap fallback, but nmap is the preferred active discovery
-source.
+source. Receiver modals show whether nmap is running or how long ago the last
+scan completed, and expose a manual **Run nmap Scan** action through
+`POST /api/nmap/scan`.
 
 Receiver modals include bounded CSI capture controls. The PWA asks the receiver
 to start a capture through `/api/nodes/:deviceId/capture/start`, defaulting to
