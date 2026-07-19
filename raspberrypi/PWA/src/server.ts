@@ -377,6 +377,18 @@ async function buildMacIdentities() {
     });
   }
 
+  for (const neighbor of Object.values((lastWorkerStatus?.mac_neighbors ?? {}) as Record<string, any>)) {
+    mergeMacIdentity(identities, neighbor?.mac, {
+      friendlyName: neighbor?.ip ? `LAN device ${neighbor.ip}` : "LAN device",
+      ip: String(neighbor?.ip ?? ""),
+      role: "LAN neighbor",
+      deviceId: null,
+      source: "worker ip neigh",
+      confidence: "observed",
+      notes: [`Neighbor state: ${neighbor?.state ?? "unknown"}`, neighbor?.dev ? `Interface: ${neighbor.dev}` : ""].filter(Boolean)
+    });
+  }
+
   for (const neighbor of await readArpNeighbors()) {
     const hostname = await reverseDnsName(neighbor.ip);
     mergeMacIdentity(identities, neighbor.mac, {

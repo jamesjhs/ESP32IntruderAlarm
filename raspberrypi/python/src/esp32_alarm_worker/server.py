@@ -35,6 +35,7 @@ from .views import render_index_html
 
 
 CAPTURE_ID_RE = re.compile(r"^[A-Za-z0-9_. -]{1,40}$")
+MAC_RE = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
 
 
 def safe_capture_id(value: object) -> str:
@@ -51,6 +52,50 @@ def capture_paths(config: WorkerConfig, capture_id: str) -> tuple[Any, Any]:
     data_path = config.capture_dir / f"{capture_id}.ndjson"
     meta_path = config.capture_dir / f"{capture_id}.json"
     return data_path, meta_path
+
+
+def normalize_mac(value: object) -> str:
+    """Return a normalized MAC address when the text is valid."""
+    text = str(value or "").strip().upper().replace("-", ":")
+    return text if MAC_RE.fullmatch(text) else ""
+
+
+async def ip_neigh_mac_map() -> dict[str, dict[str, str]]:
+    """Use `ip neigh` to map known neighbor MAC addresses to IP addresses."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ip",
+            "neigh",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=1.5)
+    except Exception:
+        return {}
+
+    neighbors: dict[str, dict[str, str]] = {}
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        ip = parts[0]
+        try:
+            lladdr_index = parts.index("lladdr")
+        except ValueError:
+            continue
+        if lladdr_index + 1 >= len(parts):
+            continue
+        mac = normalize_mac(parts[lladdr_index + 1])
+        if not mac:
+            continue
+        neighbors[mac] = {
+            "mac": mac,
+            "ip": ip,
+            "dev": parts[parts.index("dev") + 1] if "dev" in parts and parts.index("dev") + 1 < len(parts) else "",
+            "state": parts[-1],
+            "source": "ip neigh",
+        }
+    return neighbors
 
 
 async def udp_probe_loop(config: WorkerConfig) -> None:
@@ -96,6 +141,7 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
     async def index(_: web.Request) -> web.Response:
         """Render a small human-readable status page for local diagnostics."""
         status_data = store.status(config.version)
+        status_data["mac_neighbors"] = await ip_neigh_mac_map()
         return web.Response(text=render_index_html(status_data), content_type="text/html")
 
     async def receive_telemetry(request: web.Request) -> web.Response:
@@ -180,7 +226,9 @@ def make_app(config: Optional[WorkerConfig] = None) -> web.Application:
 
     async def status(_: web.Request) -> web.Response:
         """Return the full live worker status consumed by the PWA service."""
-        return web.json_response(store.status(config.version))
+        status_data = store.status(config.version)
+        status_data["mac_neighbors"] = await ip_neigh_mac_map()
+        return web.json_response(status_data)
 
     async def node(request: web.Request) -> web.Response:
         """Return one known node snapshot by device ID."""
