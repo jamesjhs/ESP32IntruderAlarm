@@ -1,6 +1,6 @@
 # ESP32-S3-WROOM-1U CSI Receiver
 
-Version: `0.5.1`
+Version: `0.5.2`
 
 ESP-IDF receiver build for ESP32-S3-WROOM-1U boards.
 

@@ -1,6 +1,6 @@
 # PWA Explanation Manual
 
-Version: `0.5.1`
+Version: `0.5.2`
 
 The PWA is the phone and desktop dashboard for the alarm.
 

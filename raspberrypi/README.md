@@ -1,6 +1,6 @@
 # Raspberry Pi Server
 
-Version: `0.5.1`
+Version: `0.5.2`
 
 This directory contains the Raspberry Pi side of ESP32IntruderAlarm.
 
@@ -43,6 +43,10 @@ and displays those fields through the normal worker/PWA status flow.
 The Pi dashboard can also start bounded receiver CSI captures, defaulting to 30
 seconds, and download the resulting `.ndjson` sample file plus `.json` metadata
 from `data/captures`.
+
+`0.5.2` patches the PWA static-file dependency audit issue, adds direct
+pan/pinch time-window control on the activity graphs, and keeps inactive
+receiver nodes out of movement history and Pi-side trigger decisions.
 
 ## Quick Start
 

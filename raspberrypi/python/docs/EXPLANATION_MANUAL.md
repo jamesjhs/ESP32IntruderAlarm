@@ -1,6 +1,6 @@
 # Python Worker Explanation Manual
 
-Version: `0.5.1`
+Version: `0.5.2`
 
 The Python worker is the local listener for the ESP32 devices.
 

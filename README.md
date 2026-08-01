@@ -6,11 +6,16 @@ The long-term goal is to place ESP32 sensing nodes (and/or a sending node) aroun
 
 ## Current Version
 
-Current prototype version: `0.5.1`.
+Current prototype version: `0.5.2`.
 
-`0.5.1` adds a separate ESP32-S3-WROOM-1U receiver build with an enhanced CSI
+`0.5.2` is a bugfix release for the Raspberry Pi interface. It patches the PWA
+static-file dependency audit issue, adds direct pan/pinch control for activity
+graph time windows, and excludes inactive receiver nodes from movement history
+and Pi-side trigger decisions.
+
+`0.5.1` added a separate ESP32-S3-WROOM-1U receiver build with an enhanced CSI
 capacity profile while keeping the original ESP32-WROOM-32 receiver and sender
-builds backward-compatible. It also adds Pi-managed bounded CSI capture files,
+builds backward-compatible. It also added Pi-managed bounded CSI capture files,
 S3 RGB identify feedback, and Pi-side MAC/IP enrichment for CSI histograms using
 known telemetry plus intermittent `nmap` discovery.
 
@@ -33,10 +38,14 @@ Recent implementation timeline:
   ESP32-S3-WROOM-1U boards, shared receiver source between WROOM-32 and S3
   builds, S3-enhanced CSI queue/rate/task-stack limits, and board/profile
   reporting in receiver status/config APIs.
-- Current `0.5.1` additions: bounded receiver CSI capture from the Pi dashboard
+- `0.5.1` additions: bounded receiver CSI capture from the Pi dashboard
   with downloadable `.ndjson`/metadata files, ESP32-S3 rainbow identify on the
   onboard RGB LED, receiver `sta_mac` status, and nmap-enriched MAC histogram
   identity display in the Pi PWA.
+- Current `0.5.2` bugfixes: patched the PWA static-file dependency audit issue,
+  replaced the clunky activity-history range handles with graph pan/pinch
+  gestures, and excluded inactive receiver nodes from movement history and
+  Pi-side trigger aggregation.
 
 ## Why CSI?
 

@@ -1,12 +1,17 @@
 # TypeScript PWA/API Service
 
-Version: `0.5.1`
+Version: `0.5.2`
 
 This app serves the Raspberry Pi web dashboard and browser-facing API on
 `127.0.0.1:3015`. It is the only service intended to sit behind Cloudflare
 Tunnel and Cloudflare Access/App Login.
 
 ## Current Release Notes
+
+`0.5.2` patches the `@fastify/static` audit advisory by moving to the fixed
+10.1.2 release. It also makes the activity graphs respond directly to horizontal
+pan and two-finger pinch gestures, and excludes inactive receiver nodes from the
+aggregate movement history and trigger path.
 
 `0.5.1` adds ESP32-S3-WROOM-1U receiver awareness to the dashboard. Receiver
 status panels now show the firmware role, board variant, and hardware profile,
