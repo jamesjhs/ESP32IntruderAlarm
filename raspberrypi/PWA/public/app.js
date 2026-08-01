@@ -1268,10 +1268,18 @@ function closeNodeSettings() {
   setNodeSettingsMessage("");
 }
 
-/** Normalizes the dual history sliders into a valid [from, to] hour window. */
-function normalizeHistoryWindow() {
-  let fromHours = Number(historyFromEl.value);
-  let toHours = Number(historyToEl.value);
+function syncHistoryWindowUi() {
+  historyFromEl.value = String(historyWindow.fromHours);
+  historyToEl.value = String(historyWindow.toHours);
+  historyFromLabelEl.textContent = formatHours(historyWindow.fromHours);
+  historyToLabelEl.textContent = formatHours(historyWindow.toHours);
+  historyRangeLabelEl.textContent = `Showing ${formatHours(historyWindow.fromHours)} to ${formatHours(historyWindow.toHours)} before now.`;
+}
+
+/** Normalizes the active history window into a valid [from, to] hour window. */
+function normalizeHistoryWindow(options = {}) {
+  let fromHours = options.fromInputs ? Number(historyFromEl.value) : Number(historyWindow.fromHours);
+  let toHours = options.fromInputs ? Number(historyToEl.value) : Number(historyWindow.toHours);
   const max = Math.min(MAX_HISTORY_HOURS, Number(historyFromEl.max) || MAX_HISTORY_HOURS);
   if (!Number.isFinite(fromHours)) fromHours = Math.min(DEFAULT_HISTORY_HOURS, max);
   if (!Number.isFinite(toHours)) toHours = 0;
@@ -1281,11 +1289,7 @@ function normalizeHistoryWindow() {
     [fromHours, toHours] = [toHours, fromHours];
   }
   historyWindow = { fromHours, toHours };
-  historyFromEl.value = String(fromHours);
-  historyToEl.value = String(toHours);
-  historyFromLabelEl.textContent = formatHours(fromHours);
-  historyToLabelEl.textContent = formatHours(toHours);
-  historyRangeLabelEl.textContent = `Showing ${formatHours(fromHours)} to ${formatHours(toHours)} before now.`;
+  syncHistoryWindowUi();
 }
 
 /**
@@ -1678,8 +1682,8 @@ function clampHistoryWindow(fromHours, toHours) {
 
 function applyHistoryWindow(fromHours, toHours) {
   const clamped = clampHistoryWindow(fromHours, toHours);
-  historyFromEl.value = String(clamped.fromHours);
-  historyToEl.value = String(clamped.toHours);
+  historyWindow = clamped;
+  syncHistoryWindowUi();
   renderMovementCharts();
 }
 
@@ -2157,8 +2161,12 @@ document.querySelector("#backup-db").addEventListener("click", async () => {
 // Movement history controls redraw immediately while sliding, then fetch fresh
 // persisted samples when the user releases/commits the range.
 for (const input of [historyFromEl, historyToEl]) {
-  input.addEventListener("input", renderMovementCharts);
+  input.addEventListener("input", () => {
+    normalizeHistoryWindow({ fromInputs: true });
+    renderMovementCharts();
+  });
   input.addEventListener("change", () => {
+    normalizeHistoryWindow({ fromInputs: true });
     refreshMovementHistory().catch((error) => setMessage(apiUnavailableMessage(error)));
   });
 }
