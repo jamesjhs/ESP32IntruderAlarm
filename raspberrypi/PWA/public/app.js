@@ -1740,7 +1740,7 @@ function updateHistoryGesture() {
 
   if (historyGestureState.mode === "pan" && pointers.length === 1) {
     const dx = pointers[0].clientX - historyGestureState.startX;
-    const deltaHours = -(dx / Math.max(1, rect.width)) * span;
+    const deltaHours = (dx / Math.max(1, rect.width)) * span;
     applyHistoryWindow(start.fromHours + deltaHours, start.toHours + deltaHours);
   }
 }
