@@ -180,6 +180,10 @@ h3 {
   gap: 14px;
 }
 
+.chart-header .history-controls {
+  margin-left: auto;
+}
+
 .range-shell {
   display: none;
 }

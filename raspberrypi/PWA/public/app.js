@@ -285,6 +285,13 @@ function formatHours(value) {
   return Number.isInteger(number) ? `${number}h` : `${number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}h`;
 }
 
+function formatClockTime(timestamp) {
+  const date = new Date(timestamp);
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
 /** Formats a node age into a compact, friendly "last seen" label. */
 function formatLastSeenAge(seconds) {
   const age = asNumber(seconds);
@@ -1273,7 +1280,9 @@ function syncHistoryWindowUi() {
   historyToEl.value = String(historyWindow.toHours);
   historyFromLabelEl.textContent = formatHours(historyWindow.fromHours);
   historyToLabelEl.textContent = formatHours(historyWindow.toHours);
-  historyRangeLabelEl.textContent = `Showing ${formatHours(historyWindow.fromHours)} to ${formatHours(historyWindow.toHours)} before now.`;
+  if (historyRangeLabelEl) {
+    historyRangeLabelEl.textContent = "";
+  }
 }
 
 /** Normalizes the active history window into a valid [from, to] hour window. */
@@ -1457,7 +1466,7 @@ function drawChart(canvas, samples, options = {}) {
     left: Math.max(42, Math.ceil(ctx.measureText(yMaxLabel).width) + 16),
     right: 16,
     top: 14,
-    bottom: 28
+    bottom: 42
   };
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
@@ -1487,9 +1496,11 @@ function drawChart(canvas, samples, options = {}) {
   ctx.fillStyle = "#53606f";
   ctx.fillText(yMaxLabel, 6, padding.top + 4);
   ctx.fillText("0", 24, padding.top + innerHeight);
-  ctx.fillText(`${formatHours(fromHours)} ago`, padding.left, height - 8);
+  ctx.fillText(`${formatHours(fromHours)} ago`, padding.left, height - 22);
+  ctx.fillText(formatClockTime(fromTime), padding.left, height - 8);
   ctx.textAlign = "right";
-  ctx.fillText(toHours === 0 ? "now" : `${formatHours(toHours)} ago`, width - padding.right, height - 8);
+  ctx.fillText(toHours === 0 ? "now" : `${formatHours(toHours)} ago`, width - padding.right, height - 22);
+  ctx.fillText(formatClockTime(toTime), width - padding.right, height - 8);
   ctx.textAlign = "left";
 
   if (options.triggerLine) {
@@ -1539,7 +1550,7 @@ function drawChart(canvas, samples, options = {}) {
 function drawComparisonChart() {
   const { ctx, width, height } = chartDimensions(comparisonChartEl);
   const { series, fromTime, toTime } = comparisonSeries(movementHistory.samples);
-  const padding = { left: 42, right: 16, top: 14, bottom: 28 };
+  const padding = { left: 42, right: 16, top: 14, bottom: 42 };
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
   const x = (time) => padding.left + ((time - fromTime) / Math.max(1, toTime - fromTime)) * innerWidth;
@@ -1569,9 +1580,11 @@ function drawComparisonChart() {
   ctx.fillStyle = "#53606f";
   ctx.fillText("1.0", 10, padding.top + 4);
   ctx.fillText("0", 24, padding.top + innerHeight);
-  ctx.fillText(`${formatHours(historyWindow.fromHours)} ago`, padding.left, height - 8);
+  ctx.fillText(`${formatHours(historyWindow.fromHours)} ago`, padding.left, height - 22);
+  ctx.fillText(formatClockTime(fromTime), padding.left, height - 8);
   ctx.textAlign = "right";
-  ctx.fillText(historyWindow.toHours === 0 ? "now" : `${formatHours(historyWindow.toHours)} ago`, width - padding.right, height - 8);
+  ctx.fillText(historyWindow.toHours === 0 ? "now" : `${formatHours(historyWindow.toHours)} ago`, width - padding.right, height - 22);
+  ctx.fillText(formatClockTime(toTime), width - padding.right, height - 8);
   ctx.textAlign = "left";
 
   if (series.length < 2) {
@@ -1744,7 +1757,7 @@ function updateHistoryGesture() {
 
   if (historyGestureState.mode === "pan" && pointers.length === 1) {
     const dx = pointers[0].clientX - historyGestureState.startX;
-    const deltaHours = (dx / Math.max(1, rect.width)) * span;
+    const deltaHours = -(dx / Math.max(1, rect.width)) * span;
     applyHistoryWindow(start.fromHours + deltaHours, start.toHours + deltaHours);
   }
 }
