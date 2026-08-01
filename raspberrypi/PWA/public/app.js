@@ -65,6 +65,7 @@ const nodeCaptureProgressBarEl = document.querySelector("#node-capture-progress-
 const nodeCaptureProgressDetailEl = document.querySelector("#node-capture-progress-detail");
 const capturesListEl = document.querySelector("#captures-list");
 const nodeSettingsMessageEl = document.querySelector("#node-settings-message");
+const movementHistoryEl = document.querySelector("#movement-history");
 const historyFromEl = document.querySelector("#history-from-hours");
 const historyToEl = document.querySelector("#history-to-hours");
 const historyFromLabelEl = document.querySelector("#history-from-label");
@@ -214,6 +215,8 @@ let selectedNodeRole = "csi_receiver";
 let movementHistory = { range: { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0, availableHours: 0 }, samples: [] };
 let movementTrigger = { threshold: 3, enabled: true };
 let historyWindow = { fromHours: DEFAULT_HISTORY_HOURS, toHours: 0 };
+let historyGestureState = null;
+let historyRefreshTimer = null;
 let nodeStatusPollInFlight = false;
 let captureProgressState = { captureId: "", records: null, changedAt: 0 };
 
@@ -1640,6 +1643,153 @@ function updateHistorySliderMax(availableHours) {
   historyToEl.value = String(Math.min(historyWindow.toHours, max));
 }
 
+function historyWindowMax() {
+  return Math.min(MAX_HISTORY_HOURS, Number(historyFromEl.max) || MAX_HISTORY_HOURS);
+}
+
+function clampHistoryWindow(fromHours, toHours) {
+  let from = Number(fromHours);
+  let to = Number(toHours);
+  const max = historyWindowMax();
+  const minSpan = 1 / 60;
+  if (!Number.isFinite(from)) from = historyWindow.fromHours;
+  if (!Number.isFinite(to)) to = historyWindow.toHours;
+  if (from < to) {
+    [from, to] = [to, from];
+  }
+  if (from - to < minSpan) {
+    const center = (from + to) / 2;
+    from = center + minSpan / 2;
+    to = center - minSpan / 2;
+  }
+  if (from > max) {
+    to -= from - max;
+    from = max;
+  }
+  if (to < 0) {
+    from -= to;
+    to = 0;
+  }
+  return {
+    fromHours: Math.min(max, Math.max(minSpan, from)),
+    toHours: Math.min(max - minSpan, Math.max(0, to))
+  };
+}
+
+function applyHistoryWindow(fromHours, toHours) {
+  const clamped = clampHistoryWindow(fromHours, toHours);
+  historyFromEl.value = String(clamped.fromHours);
+  historyToEl.value = String(clamped.toHours);
+  renderMovementCharts();
+}
+
+function scheduleMovementHistoryRefresh(delayMs = 180) {
+  if (historyRefreshTimer) {
+    clearTimeout(historyRefreshTimer);
+  }
+  historyRefreshTimer = setTimeout(() => {
+    historyRefreshTimer = null;
+    refreshMovementHistory().catch((error) => setMessage(apiUnavailableMessage(error)));
+  }, delayMs);
+}
+
+function historyAgeAtClientX(clientX, rect, windowState) {
+  const span = Math.max(1 / 60, windowState.fromHours - windowState.toHours);
+  const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+  return windowState.fromHours - fraction * span;
+}
+
+function beginHistoryGesture(target) {
+  const pointers = [...historyGestureState.pointers.values()].sort((left, right) => left.pointerId - right.pointerId);
+  const rect = target.getBoundingClientRect();
+  historyGestureState.target = target;
+  historyGestureState.startWindow = { ...historyWindow };
+  historyGestureState.startRect = rect;
+  if (pointers.length >= 2) {
+    const [left, right] = pointers;
+    const centerX = (left.clientX + right.clientX) / 2;
+    historyGestureState.mode = "pinch";
+    historyGestureState.startCenterX = centerX;
+    historyGestureState.startCenterAge = historyAgeAtClientX(centerX, rect, historyGestureState.startWindow);
+    historyGestureState.startDistance = Math.max(8, Math.abs(right.clientX - left.clientX));
+  } else {
+    historyGestureState.mode = "pan";
+    historyGestureState.startX = pointers[0].clientX;
+  }
+}
+
+function updateHistoryGesture() {
+  if (!historyGestureState?.target || !historyGestureState.startWindow) return;
+  const pointers = [...historyGestureState.pointers.values()].sort((left, right) => left.pointerId - right.pointerId);
+  const rect = historyGestureState.target.getBoundingClientRect();
+  const start = historyGestureState.startWindow;
+  const span = Math.max(1 / 60, start.fromHours - start.toHours);
+
+  if (historyGestureState.mode === "pinch" && pointers.length >= 2) {
+    const [left, right] = pointers;
+    const centerX = (left.clientX + right.clientX) / 2;
+    const distance = Math.max(8, Math.abs(right.clientX - left.clientX));
+    const scale = historyGestureState.startDistance / distance;
+    const nextSpan = Math.max(1 / 60, Math.min(historyWindowMax(), span * scale));
+    const centerDeltaHours = -((centerX - historyGestureState.startCenterX) / Math.max(1, rect.width)) * span;
+    const centerAge = historyGestureState.startCenterAge + centerDeltaHours;
+    const centerFraction = Math.max(0, Math.min(1, (centerX - rect.left) / Math.max(1, rect.width)));
+    applyHistoryWindow(centerAge + centerFraction * nextSpan, centerAge - (1 - centerFraction) * nextSpan);
+    return;
+  }
+
+  if (historyGestureState.mode === "pan" && pointers.length === 1) {
+    const dx = pointers[0].clientX - historyGestureState.startX;
+    const deltaHours = -(dx / Math.max(1, rect.width)) * span;
+    applyHistoryWindow(start.fromHours + deltaHours, start.toHours + deltaHours);
+  }
+}
+
+function finishHistoryGesture() {
+  if (historyGestureState?.target) {
+    scheduleMovementHistoryRefresh();
+  }
+}
+
+function attachHistoryGestureControls() {
+  if (!movementHistoryEl) return;
+
+  movementHistoryEl.addEventListener("pointerdown", (event) => {
+    const target = event.target.closest?.(".chart-card canvas");
+    if (!target || !movementHistoryEl.contains(target)) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    target.setPointerCapture?.(event.pointerId);
+    historyGestureState ??= { pointers: new Map() };
+    historyGestureState.pointers.set(event.pointerId, { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY });
+    beginHistoryGesture(target);
+    target.classList.add("dragging");
+  });
+
+  movementHistoryEl.addEventListener("pointermove", (event) => {
+    if (!historyGestureState?.pointers?.has(event.pointerId)) return;
+    event.preventDefault();
+    historyGestureState.pointers.set(event.pointerId, { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY });
+    updateHistoryGesture();
+  });
+
+  const endPointer = (event) => {
+    if (!historyGestureState?.pointers?.has(event.pointerId)) return;
+    const target = historyGestureState.target;
+    historyGestureState.pointers.delete(event.pointerId);
+    finishHistoryGesture();
+    if (historyGestureState.pointers.size > 0 && target) {
+      beginHistoryGesture(target);
+    } else {
+      target?.classList.remove("dragging");
+      historyGestureState = null;
+    }
+  };
+
+  movementHistoryEl.addEventListener("pointerup", endPointer);
+  movementHistoryEl.addEventListener("pointercancel", endPointer);
+}
+
 /** Fetches movement history for the selected time window and redraws charts. */
 async function refreshMovementHistory() {
   normalizeHistoryWindow();
@@ -2045,6 +2195,7 @@ if ("serviceWorker" in navigator) {
 // failure in push/service-worker setup does not prevent status and admin data
 // from rendering.
 registerServiceWorker();
+attachHistoryGestureControls();
 attachNodeSettingsHelp();
 refreshStatus();
 refreshAdmin().catch((error) => setMessage(error.message));

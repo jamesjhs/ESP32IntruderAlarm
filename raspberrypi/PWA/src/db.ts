@@ -395,12 +395,16 @@ export class AlarmDatabase {
     const insert = this.db.prepare(
       "INSERT INTO movement_scores (device_id, node_name, score, movement_detected, sampled_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)"
     );
+    const activeDeviceIds = new Set(this.listNodes().filter((node) => node.active).map((node) => node.deviceId));
     const transaction = this.db.transaction(() => {
       for (const node of nodes) {
         const deviceId = toNumber(node.device_id);
         const payload = node.payload ?? {};
         const score = toNumber(payload.movement_score);
         if (deviceId === null || score === null) {
+          continue;
+        }
+        if (!activeDeviceIds.has(deviceId)) {
           continue;
         }
         insert.run(deviceId, String(node.name ?? `Movement${deviceId.toString(16).padStart(2, "0")}`), score, boolToDb(toDetected(payload.movement_detected)));
@@ -420,12 +424,13 @@ export class AlarmDatabase {
           sampled_at AS sampledAt
          FROM movement_scores
          WHERE sampled_at >= ? AND sampled_at <= ?
+          AND device_id IN (SELECT device_id FROM nodes WHERE active = 1)
          ORDER BY sampled_at ASC, device_id ASC`
       )
       .all(fromIso, toIso)
       .map((row: any) => ({ ...row, movementDetected: dbToBool(row.movementDetected) })) as MovementScoreSample[];
     const maxHoursRow = this.db
-      .prepare("SELECT MIN(sampled_at) AS firstSampleAt FROM movement_scores")
+      .prepare("SELECT MIN(sampled_at) AS firstSampleAt FROM movement_scores WHERE device_id IN (SELECT device_id FROM nodes WHERE active = 1)")
       .get() as { firstSampleAt: string | null };
     const availableHours = maxHoursRow.firstSampleAt
       ? Math.max(0, (Date.now() - Date.parse(`${maxHoursRow.firstSampleAt.replace(" ", "T")}Z`)) / 3600000)

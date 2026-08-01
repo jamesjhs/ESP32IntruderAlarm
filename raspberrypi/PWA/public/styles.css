@@ -181,9 +181,7 @@ h3 {
 }
 
 .range-shell {
-  position: relative;
-  height: 36px;
-  margin: 12px 0 16px;
+  display: none;
 }
 
 .range-shell input[type="range"] {
@@ -264,6 +262,13 @@ h3 {
   display: block;
   width: 100%;
   min-height: 160px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.chart-card canvas.dragging {
+  cursor: grabbing;
 }
 
 .chart-legend {
