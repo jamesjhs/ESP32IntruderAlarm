@@ -1,6 +1,6 @@
 # Raspberry Pi Explanation Manual
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 The Raspberry Pi is the coordinator for the alarm system.
 
@@ -19,7 +19,7 @@ There are two Pi programs because they do different jobs:
 Cloudflare protects the website login before traffic reaches the Pi. The ESP32
 receiver is not part of the public website and should stay LAN-only.
 
-Version `0.5.2` is still a prototype, but the foundation now includes the
+Version `0.5.3` is still a prototype, but the foundation now includes the
 service split, version-aware PWA shell, persistent admin database, movement
 history, push subscription plumbing, remote receiver configuration/calibration,
 Pi-managed control of a dedicated CSI sender, protected source-MAC diagnostics,

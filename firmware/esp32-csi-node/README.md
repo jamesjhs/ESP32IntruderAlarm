@@ -1,6 +1,6 @@
 # ESP32 CSI Node
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 Standalone ESP-IDF firmware for an ESP32 Wi-Fi CSI movement sensor node.
 

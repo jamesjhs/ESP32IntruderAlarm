@@ -1,6 +1,6 @@
 # Raspberry Pi Server
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 This directory contains the Raspberry Pi side of ESP32IntruderAlarm.
 
@@ -47,6 +47,9 @@ from `data/captures`.
 `0.5.2` patches the PWA static-file dependency audit issue, adds direct
 pan/pinch time-window control on the activity graphs, and keeps inactive
 receiver nodes out of movement history and Pi-side trigger decisions.
+
+`0.5.3` restores a hidden compatibility element for the removed history-range
+line so cached PWA clients continue drawing movement graphs during update.
 
 ## Quick Start
 

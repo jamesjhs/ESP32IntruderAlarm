@@ -1,6 +1,6 @@
 # PWA And Android Push Requirements Assessment
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 ## Scope
 

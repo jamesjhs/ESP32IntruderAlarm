@@ -1,6 +1,6 @@
 # Raspberry Pi Technical Manual
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 ## Architecture
 

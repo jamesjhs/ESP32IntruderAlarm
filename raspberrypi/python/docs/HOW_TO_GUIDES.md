@@ -1,6 +1,6 @@
 # Python Worker How-To Guides
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 ## How To Start The Worker
 

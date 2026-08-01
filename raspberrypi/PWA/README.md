@@ -1,12 +1,17 @@
 # TypeScript PWA/API Service
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 This app serves the Raspberry Pi web dashboard and browser-facing API on
 `127.0.0.1:3015`. It is the only service intended to sit behind Cloudflare
 Tunnel and Cloudflare Access/App Login.
 
 ## Current Release Notes
+
+`0.5.3` fixes a graph-rendering regression during PWA update transitions. The
+visible "from/to" history sentence remains removed, but a hidden compatibility
+element is present so older cached app scripts do not throw before drawing the
+movement canvases.
 
 `0.5.2` patches the `@fastify/static` audit advisory by moving to the fixed
 10.1.2 release. It also makes the activity graphs respond directly to horizontal

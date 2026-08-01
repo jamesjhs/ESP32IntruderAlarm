@@ -1,6 +1,6 @@
 # ESP32 CSI Sender
 
-Version: `0.5.2`
+Version: `0.5.3`
 
 Dedicated packet-source firmware for the ESP32IntruderAlarm CSI experiment.
 

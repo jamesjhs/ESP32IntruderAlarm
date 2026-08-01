@@ -6,7 +6,10 @@ The long-term goal is to place ESP32 sensing nodes (and/or a sending node) aroun
 
 ## Current Version
 
-Current prototype version: `0.5.2`.
+Current prototype version: `0.5.3`.
+
+`0.5.3` fixes a PWA compatibility regression where cached clients could stop
+drawing movement graphs after the redundant history-range line was removed.
 
 `0.5.2` is a bugfix release for the Raspberry Pi interface. It patches the PWA
 static-file dependency audit issue, adds direct pan/pinch control for activity
@@ -42,10 +45,12 @@ Recent implementation timeline:
   with downloadable `.ndjson`/metadata files, ESP32-S3 rainbow identify on the
   onboard RGB LED, receiver `sta_mac` status, and nmap-enriched MAC histogram
   identity display in the Pi PWA.
-- Current `0.5.2` bugfixes: patched the PWA static-file dependency audit issue,
+- `0.5.2` bugfixes: patched the PWA static-file dependency audit issue,
   replaced the clunky activity-history range handles with graph pan/pinch
   gestures, and excluded inactive receiver nodes from movement history and
   Pi-side trigger aggregation.
+- Current `0.5.3` bugfix: restored a hidden compatibility anchor for the removed
+  history-range line so cached PWA scripts cannot block graph rendering.
 
 ## Why CSI?
 
